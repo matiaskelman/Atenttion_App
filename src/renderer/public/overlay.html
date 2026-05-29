@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    /* ── Clock ring ── */
+    .ring {
+      position: absolute;
+      left: 6px; top: 6px;
+      width: 88px; height: 88px;
+      border-radius: 50%;
+      background: rgba(12, 12, 16, 0.93);
+      border: 3px solid rgba(75, 85, 99, 0.7);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      -webkit-app-region: drag;
+      cursor: default;
+      transition: border-color 0.4s ease, opacity 0.2s ease;
+    }
+    .ring.focused     { border-color: rgba(34, 197, 94, 0.9); }
+    .ring.away        { border-color: rgba(239, 68, 68, 0.9); }
+    .ring.focus-mode  { border-color: rgba(124, 58, 237, 0.75); }
+    .ring.break-mode  { border-color: rgba(16, 185, 129, 0.75); }
+    .ring.hidden      { opacity: 0; pointer-events: none; }
+    .time {
+      color: #f3f4f6;
+      font-size: 19px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      line-height: 1;
+    }
+    .time.idle   { color: #6b7280; font-size: 13px; letter-spacing: 0.05em; }
+    .time.paused { color: #f59e0b; }
+    .label {
+      color: #6b7280;
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      line-height: 1;
+    }
+    .label.work   { color: #818cf8; }
+    .label.brk    { color: #34d399; }
+    .label.paused { color: #f59e0b; }
+
+    /* ── Feedback card ── */
+    .feedback-card {
+      position: absolute;
+      inset: 6px;
+      border-radius: 12px;
+      background: rgba(12, 12, 16, 0.97);
+      border: 1.5px solid rgba(75, 85, 99, 0.45);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 13px 12px;
+      display: none;
+      opacity: 0;
+      transform: scale(0.55);
+      transform-origin: bottom right;
+      -webkit-app-region: drag;
+      transition: opacity 0.22s ease, transform 0.22s ease;
+    }
+    .feedback-card.visible { display: flex; }
+    .feedback-card.shown   { opacity: 1; transform: scale(1); }
+
+    .feedback-title {
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7280;
+      line-height: 1;
+    }
+    .feedback-goal {
+      font-size: 8px;
+      color: #4b5563;
+      font-style: italic;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1;
+    }
+    .stars-row {
+      display: flex;
+      gap: 5px;
+      width: 100%;
+      -webkit-app-region: no-drag;
+    }
+    .star-btn {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      padding: 6px 4px;
+      border-radius: 7px;
+      border: 1.5px solid rgba(75, 85, 99, 0.4);
+      background: transparent;
+      cursor: pointer;
+      color: #6b7280;
+      font-size: 8px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+      font-family: inherit;
+    }
+    .face-dot { font-size: 14px; line-height: 1; }
+    .star-btn[data-v="1"]:hover { border-color: rgba(248,113,113,0.5); color: #fca5a5; background: rgba(248,113,113,0.08); }
+    .star-btn[data-v="2"]:hover { border-color: rgba(251,191,36,0.5);  color: #fcd34d; background: rgba(251,191,36,0.08); }
+    .star-btn[data-v="3"]:hover { border-color: rgba(167,139,250,0.5); color: #c4b5fd; background: rgba(167,139,250,0.08); }
+
+    .feedback-actions {
+      display: flex;
+      align-items: center;
+      -webkit-app-region: no-drag;
+    }
+    .btn-skip {
+      background: none;
+      border: none;
+      color: #374151;
+      font-size: 9px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: color 0.12s ease;
+    }
+    .btn-skip:hover { color: #9ca3af; }
+  </style>
+</head>
+<body>
+
+  <!-- Clock ring -->
+  <div class="ring" id="ring">
+    <div class="time idle" id="time">--:--</div>
+    <div class="label" id="label">Atenttion</div>
+  </div>
+
+  <!-- Feedback card — hidden until post-ritual -->
+  <div class="feedback-card" id="feedbackCard">
+    <div class="feedback-title">Session complete</div>
+    <div class="feedback-goal" id="feedbackGoal" style="display:none"></div>
+    <div class="stars-row">
+      <button class="star-btn" data-v="1"><span class="face-dot" style="color:#f87171">●</span><span>Scattered</span></button>
+      <button class="star-btn" data-v="2"><span class="face-dot" style="color:#fbbf24">●</span><span>Focused</span></button>
+      <button class="star-btn" data-v="3"><span class="face-dot" style="color:#a78bfa">●</span><span>Flow</span></button>
+    </div>
+    <div class="feedback-actions">
+      <button class="btn-skip" id="btnSkip">Skip <span id="countdown">(10)</span></button>
+    </div>
+  </div>
+
+  <script>
+    const ringEl       = document.getElementById('ring')
+    const timeEl       = document.getElementById('time')
+    const labelEl      = document.getElementById('label')
+    const feedbackCard = document.getElementById('feedbackCard')
+    const feedbackGoal = document.getElementById('feedbackGoal')
+    const btnSkip      = document.getElementById('btnSkip')
+    const starBtns     = document.querySelectorAll('.star-btn')
+
+    let countdownInterval = null
+    const countdownEl = document.getElementById('countdown')
+
+    function startCountdown() {
+      clearCountdown()
+      let remaining = 10
+      countdownEl.textContent = '(' + remaining + ')'
+      countdownInterval = setInterval(() => {
+        remaining--
+        if (remaining <= 0) {
+          clearCountdown()
+        } else {
+          countdownEl.textContent = '(' + remaining + ')'
+        }
+      }, 1000)
+    }
+
+    function clearCountdown() {
+      if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null }
+      countdownEl.textContent = ''
+    }
+
+    function pad(n) { return String(n).padStart(2, '0') }
+
+    function resetStars() {
+      starBtns.forEach((b) => b.classList.remove('active'))
+    }
+
+    // ── Clock state ──
+    window.overlayApi.onState(function({ timeLeft, eyeStatus, pomodoroState }) {
+      timeEl.className = 'time'
+      if (!pomodoroState || pomodoroState === 'idle') {
+        timeEl.textContent = '--:--'
+        timeEl.classList.add('idle')
+      } else {
+        const t = timeLeft || 0
+        timeEl.textContent = pad(Math.floor(t / 60)) + ':' + pad(t % 60)
+        if (pomodoroState === 'paused') timeEl.classList.add('paused')
+      }
+
+      ringEl.className = 'ring'
+      if (feedbackCard.classList.contains('visible')) ringEl.classList.add('hidden')
+      if (eyeStatus === 'looking' || eyeStatus === 'blinking') ringEl.classList.add('focused')
+      else if (eyeStatus === 'away') ringEl.classList.add('away')
+      else if (pomodoroState === 'work') ringEl.classList.add('focus-mode')
+      else if (pomodoroState === 'break') ringEl.classList.add('break-mode')
+
+      labelEl.className = 'label'
+      if (pomodoroState === 'work') { labelEl.textContent = 'Focus'; labelEl.classList.add('work') }
+      else if (pomodoroState === 'break') { labelEl.textContent = 'Break'; labelEl.classList.add('brk') }
+      else if (pomodoroState === 'paused') { labelEl.textContent = 'Paused'; labelEl.classList.add('paused') }
+      else { labelEl.textContent = 'Atenttion' }
+    })
+
+    // ── Show feedback ──
+    window.overlayApi.onFeedback(function({ goal }) {
+      resetStars()
+      startCountdown()
+      if (goal) {
+        feedbackGoal.textContent = '”' + goal + '”'
+        feedbackGoal.style.display = 'block'
+      } else {
+        feedbackGoal.style.display = 'none'
+      }
+      ringEl.classList.add('hidden')
+      feedbackCard.classList.add('visible')
+      requestAnimationFrame(() => requestAnimationFrame(() => feedbackCard.classList.add('shown')))
+    })
+
+    // ── Dismiss feedback ──
+    window.overlayApi.onDismiss(function() {
+      clearCountdown()
+      feedbackCard.classList.remove('shown', 'visible')
+      ringEl.classList.remove('hidden')
+    })
+
+    // ── Face interaction — tap submits immediately ──
+    starBtns.forEach((btn) => {
+      btn.addEventListener('click', function() {
+        clearCountdown()
+        window.overlayApi.submitRating(Number(this.dataset.v))
+      })
+    })
+
+    btnSkip.addEventListener('click', () => { clearCountdown(); window.overlayApi.submitRating(null) })
+  </script>
+</body>
+</html>

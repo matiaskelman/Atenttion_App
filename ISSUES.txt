@@ -1,0 +1,154 @@
+ATENTTION APP — ISSUES BACKLOG
+Generated: 2026-05-23
+Format: [SEVERITY] CATEGORY > Title | Files | Notes
+
+==============================================================
+BUGS — things that are factually wrong
+==============================================================
+
+[BUG-1] EYE > Overlay label wrong during breaks
+  Files: src/renderer/public/overlay.html:88-93
+  Problem: checks pomodoroState === 'short-break' || 'long-break' — these values never exist.
+           pomodoroState is only 'work'|'break'|'idle'|'paused'.
+           Break type lives in pomodoroMode, not pomodoroState.
+  Fix: change condition to pomodoroState === 'break'; optionally also send pomodoroMode
+       in the overlay:update payload to distinguish short vs long.
+
+[BUG-2] ✅ FIXED — EYE > Blink rate underreports for the first 60s of every session
+  Files: src/renderer/src/hooks/useEyeTracker.js:142
+  Problem: setBlinkRate(blinkTimesRef.current.length)
+           blinkTimesRef is filtered to last 60s window. If session has run 10s and 2 blinks
+           occurred, reports 2 BPM. Real rate is 12 BPM.
+           Corrupts focus score for all short sessions and the first minute of every session.
+  Fix: normalize — Math.round(count * 60000 / Math.min(elapsed, 60000))
+       where elapsed = Date.now() - trackingStartTime.
+       Needs a trackingStartTimeRef initialized in startTracking().
+
+[BUG-3] ✅ FIXED — POMODORO > Away time in saved session data is cumulative, not per-session
+  awayStartRef added to usePomodoro; snapshotted when start() is called from idle.
+  Session data uses awaySecondsRef.current - awayStartRef.current in both timer and skip().
+
+[BUG-4] ✅ FIXED — DATA > Sessions not loaded on app restart — stats always zero
+  Added appendSessionJson/loadSessionsFromJson to persistence.js (atenttion-sessions.json).
+  data:saveSession now writes both markdown (human) and JSON (machine) in parallel.
+  Added data:loadSessions IPC + applySessionHistory store action + startup load in App.jsx.
+  todayFocusSeconds is recomputed from the loaded sessions array filtered to today's date.
+
+[BUG-5] ✅ FIXED — DATA > App usage data never persisted
+  Added saveAppUsage/loadAppUsage to persistence.js (atenttion-app-usage.json, date-stamped).
+  Saved on every session end (via saveSession in usePomodoro) + every 60s in App.jsx.
+  Loaded on startup if stored date matches today (stale data from yesterday is ignored).
+  setAppUsage store action restores appUsageFocus + appUsageBreak on load.
+
+==============================================================
+DESIGN PROBLEMS — work but are bad
+==============================================================
+
+[DESIGN-1] PERF > usePomodoro subscribes to entire store
+  Files: src/renderer/src/hooks/usePomodoro.js:25,42-47
+  Problem: const store = useStore() — re-renders on every state change in the whole app.
+           Every blink update, every timer tick triggers 6 ref-sync effects.
+           Approximately 1-2 re-renders/sec while running, multiplied by all effects.
+  Fix: remove const store = useStore(). Read values via useStore.getState() inside
+       callbacks (already done for most things). Delete all 6 ref-sync useEffects.
+       Replace stateRef.current etc. with direct useStore.getState().pomodoroState calls.
+
+[DESIGN-2] ✅ FIXED — UX > sessionsCompleted and sessions.length are the same number — one is redundant
+  StatsPage and FocusPage now derive today's session count from sessions[] (persisted JSON)
+  instead of sessionsCompleted (runtime-only counter). Label updated to "Sessions Today".
+  sessionsCompleted stays in the store for Pomodoro mode-rotation logic only.
+
+[DESIGN-3] ✅ FIXED — DATA > App usage doesn't reset at midnight
+  storedDateRef added to useAppTracker; compared to today on each 2s poll.
+  On date change: calls resetDailyMetrics() (new store action) + saves zeroed usage JSON.
+
+[DESIGN-4] ✅ FIXED — BUG-RISK > SystemPage and App.jsx both independently load getCurrentWallpaper()
+  originalWallpaper added to Zustand store. App.jsx loads it once on startup + syncs ref.
+  Wallpaper effect checks store before falling back to IPC. SystemPage reads from store,
+  removed its local state + its own getCurrentWallpaper() IPC call entirely.
+
+[DESIGN-5] UX > Wallpaper feature is always on, no way to disable
+  Files: src/renderer/src/App.jsx:57-82
+         src/renderer/src/components/Settings.jsx
+  Problem: Desktop wallpaper changes to #111111 on every Pomodoro start. No toggle.
+           Users who don't want this can't turn it off.
+  Fix: add enableFocusWallpaper: true preference. Show toggle in Settings.
+       Gate the entire wallpaper effect block behind this flag.
+
+==============================================================
+MINOR CODE — not broken but should be fixed
+==============================================================
+
+[MINOR-1] REACT > Array index used as key in sessions table
+  Files: src/renderer/src/components/pages/StatsPage.jsx:160
+  Code: .map((s, i) => <div key={i}>
+  Fix: key={s.date} (dates are unique per session).
+
+[MINOR-2] REACT > saveSession redefined on every render of usePomodoro
+  Files: src/renderer/src/hooks/usePomodoro.js:30-32
+  Code: const saveSession = (session) => { window.api?.data.saveSession... }
+  Fix: move above the hook as a module-level function. It closes over nothing.
+
+[MINOR-3] UX > blinkCount in FocusPage header is all-time cumulative, not per-session
+  Files: src/renderer/src/components/pages/FocusPage.jsx:15,38
+  Problem: blinkCount never resets between sessions if eye tracking stays on.
+           After 3 sessions it shows e.g. 287 blinks — meaningless as a per-session metric.
+  Fix: store sessionStartBlink in the store (reset when work session starts), display
+       blinkCount - sessionStartBlink in the header.
+
+==============================================================
+FEATURE GAPS — missing, worth building
+==============================================================
+
+[FEAT-1] ✅ DONE — Real-time focus score in EyeTracker panel
+  Extracted computeFocusScore to utils/focusScore.js (shared by usePomodoro + useEyeTracker).
+  useEyeTracker computes liveFocusScore on every blink using live BPM + blinkVariability.
+  Stored in Zustand liveFocusScore; reset to null on start/stop.
+  EyeTracker.jsx shows it as a 3rd stat (green ≥80, amber ≥50, red <50, — if no data yet).
+
+[FEAT-2] ✅ DONE — Week-view bar chart in Stats
+  Sessions already load from JSON on startup (BUG-4). Added week aggregation in StatsPage:
+  groups last 7 days by calendar date, sums focus minutes per day.
+  BarChart with today highlighted in violet, past days in zinc. Always visible.
+
+[FEAT-3] ✅ FIXED — Notification + optional sound on auto-pause from eye tracking
+  Added notifyOnAutoPause (default on) + soundOnAutoPause (default off) prefs.
+  useEyeTracker fires Notification API + Web Audio C5 beep on auto-pause.
+  Two toggle switches added to Settings. Both prefs persist via savePreferences.
+
+[FEAT-4] ✅ FIXED — Daily focus goal with progress bar
+  Added dailyGoalSeconds preference (default 4h, slider 1-12h in Settings).
+  FocusPage shows a horizontal progress bar above stats; turns green at 100%.
+  Shows "X to go" subtext and "Goal reached!" on completion. Persists via savePreferences.
+
+[FEAT-5] ✅ DONE — App usage saved per session to sessions log
+  appUsage: { ...appUsageFocus } snapshot added to sessionData in usePomodoro (both
+  timer-end and skip paths). appendSessionJson stores the full object so all historical
+  sessions in atenttion-sessions.json now include per-session app usage.
+
+[FEAT-6] ✅ FIXED Midnight / day-boundary reset
+  Currently: all today-scoped metrics accumulate until restart.
+  Idea: on each useAppTracker poll, compare current date to a storedDate ref.
+        If date changed, dispatch a store action to reset daily metrics and update storedDate.
+        Zero extra persistence needed — just a date comparison.
+
+[FEAT-7] ✅ DONE — Streak counter
+  streak + lastSessionDate added to store; persisted in atenttion-preferences.md.
+  updateStreak() in usePomodoro computes consecutive-day logic after every session save.
+  StatsPage summary card "Total Sessions" replaced with "Streak" (shows Nd or —).
+  persistence.js readPreferences parser fixed to handle booleans and empty strings.
+
+[FEAT-8] Disable auto-wallpaper toggle in Settings
+  Already listed under DESIGN-5, repeating here as a feature entry.
+  One-line store field + one slider/toggle in Settings.jsx.
+
+==============================================================
+IMPLEMENTATION NOTES
+==============================================================
+
+- BUG-2 and BUG-3 require adding refs in useEyeTracker/usePomodoro; no IPC changes
+- BUG-4 requires new persistence.js function + store action; riskier change
+- DESIGN-1 cleanup is safe and improves perf; no behavior change
+- FEAT-2 depends on BUG-4 being fixed first
+- FEAT-6 (midnight reset) is a prerequisite for DESIGN-3 fix; they're the same thing
+- Overlay fix (BUG-1) is a 2-line change in overlay.html only

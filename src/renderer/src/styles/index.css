@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    margin: 0;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    font-family: 'Inter', system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #444;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-[#111111] border border-[#1e1e1e] rounded-2xl p-5;
+  }
+
+  .card-sm {
+    @apply bg-[#111111] border border-[#1e1e1e] rounded-xl p-4 flex flex-col gap-0.5;
+  }
+
+  .stat-mini {
+    @apply bg-[#161616] border border-[#1e1e1e] rounded-xl p-3 flex flex-col gap-0.5;
+  }
+
+  .stat-label {
+    @apply text-[10px] text-neutral-600 uppercase tracking-wider;
+  }
+
+  .stat-value {
+    @apply text-sm font-semibold text-neutral-200;
+  }
+
+  .btn {
+    @apply flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-medium
+           transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-primary {
+    @apply bg-violet-600 hover:bg-violet-500 text-white;
+  }
+
+  .btn-secondary {
+    @apply bg-[#1e1e1e] hover:bg-[#2a2a2a] text-neutral-300 border border-[#2a2a2a];
+  }
+
+  .btn-danger {
+    @apply bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/20;
+  }
+
+  .btn-icon {
+    @apply w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#1e1e1e]
+           transition-colors cursor-pointer;
+  }
+
+  .input {
+    @apply w-full bg-[#161616] border border-[#2a2a2a] rounded-xl px-3 py-2 text-sm
+           text-neutral-200 placeholder-neutral-600 outline-none
+           focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/20
+           transition-all;
+  }
+}
+
+@layer utilities {
+  .shadow-violet {
+    box-shadow: 0 0 24px rgba(124, 58, 237, 0.25);
+  }
+
+  .glow-emerald {
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.2);
+  }
+}
+
+@keyframes eq-bar {
+  0%, 100% { transform: scaleY(0.25); }
+  50%       { transform: scaleY(1); }
+}
+
+.animate-eq {
+  animation: eq-bar 0.65s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/* Volume range slider — cross-browser dark styling */
+.volume-slider {
+  @apply appearance-none outline-none cursor-pointer bg-transparent;
+  /* Explicit height so the thumb has room to be centred without clipping */
+  height: 20px;
+}
+.volume-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  background: #222222;
+  border-radius: 9999px;
+}
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #a78bfa;   /* violet-400 */
+  cursor: pointer;
+  /* Centre the thumb vertically on the 6px track: (6-14)/2 = -4px */
+  margin-top: -4px;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35);
+}
+.volume-slider:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.55);
+}
+.volume-slider::-moz-range-track {
+  height: 6px;
+  background: #222222;
+  border-radius: 9999px;
+  border: none;
+}
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #a78bfa;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.35);
+}

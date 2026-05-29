@@ -1,0 +1,26 @@
+export const createEyeTrackerSlice = (set) => ({
+  eyeTrackingActive: false,
+  eyeStatus: 'unknown', // 'looking' | 'away' | 'blinking' | 'not-tracking' | 'unknown'
+  blinkCount: 0,
+  blinkRate: 0,           // blinks per minute (last 60s window)
+  blinkVariability: null, // CV of inter-blink intervals — null until 3+ blinks recorded
+  liveFocusScore: null,   // 0-100, updated on every blink while tracking
+  lookingAwaySeconds: 0,
+  totalLookingAwaySeconds: 0,
+  modelLoaded: false,
+  modelLoading: false,
+  camError: null,
+  modelError: null,
+  setEyeTrackingActive: (v) => set({ eyeTrackingActive: v }),
+  setEyeStatus: (s) => set({ eyeStatus: s }),
+  setBlinkCount: (c) => set({ blinkCount: c }),
+  setBlinkRate: (r) => set({ blinkRate: r }),
+  setBlinkVariability: (v) => set({ blinkVariability: v }),
+  setLiveFocusScore: (v) => set({ liveFocusScore: v }),
+  setLookingAwaySeconds: (d) => set({ lookingAwaySeconds: d }),
+  addLookingAway: (d) => set((s) => ({ totalLookingAwaySeconds: s.totalLookingAwaySeconds + d })),
+  setModelLoaded: (v) => set({ modelLoaded: v }),
+  setModelLoading: (v) => set({ modelLoading: v }),
+  setModelError: (e) => set({ modelError: e }),
+  setCamError: (e) => set({ camError: e })
+})

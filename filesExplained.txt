@@ -1,0 +1,333 @@
+ATENTTION APP — FILE REFERENCE
+================================
+Every source file explained. Updated: 2026-05-22.
+
+════════════════════════════════════════
+ENTRY POINTS & CONFIG
+════════════════════════════════════════
+
+src/main/index.js
+  Main process entry point. Creates the BrowserWindow (frameless, 1140×760, dark
+  background). Registers the custom `models://` Electron protocol before app.ready
+  so face-api models can be served in production builds. Wires up window IPC
+  (minimize/maximize/close/isMaximized), sets up all IPC modules (systemInfo,
+  documents, persistence), and loads the renderer URL (Vite dev server in
+  development, dist/index.html in production).
+
+src/preload/index.js
+  The security bridge between the Electron main process and the React renderer.
+  Exposes a single `window.api` object via contextBridge with four namespaces:
+    - api.window   → minimize, maximize, close, isMaximized, onMaximized
+    - api.data     → saveSession, savePreferences, loadPreferences, getSessionsPath,
+                     getPrefsPath, getSessionCount
+    - api.docs     → checkDeps, installMarkitdown, pickFile, convertFile, convertUrl
+    - api.system   → getInfo, getActiveApp, getCurrentWallpaper, setWallpaper
+  All calls go through ipcRenderer.invoke (two-way) or ipcRenderer.send (fire-and-forget).
+
+src/renderer/index.html
+  The HTML shell loaded by Electron. Sets a strict Content Security Policy
+  (allows models:// for face-api), loads Inter + JetBrains Mono from Google Fonts,
+  and mounts the React app at <div id="root">.
+
+src/renderer/src/main.jsx
+  React bootstrapper. Requests browser notification permission on startup,
+  then renders <App /> into #root with React.StrictMode.
+
+src/renderer/src/App.jsx
+  Top-level React shell. Reads the `page` state from Zustand and renders the
+  correct page component (FocusPage / StatsPage / SystemPage / DocumentsPage)
+  inside a layout of TitleBar + Sidebar + main content area.
+
+src/renderer/src/styles/index.css
+  Global Tailwind CSS + custom component classes. Defines:
+    .card / .card-sm     — dark rounded panel containers
+    .stat-mini           — tiny metric boxes (used in grids)
+    .btn / .btn-primary / .btn-secondary / .btn-danger / .btn-icon
+    .input               — styled text input
+    .shadow-violet       — violet glow utility for the play button
+  Also sets scrollbar styling, body font (Inter), and background color (#0a0a0a).
+
+════════════════════════════════════════
+MAIN PROCESS MODULES
+════════════════════════════════════════
+
+src/main/systemInfo.js
+  Provides system monitoring via Node.js `os` module + OS-native shell commands.
+  IPC handlers exposed:
+    system:getInfo        → CPU%, used memory%, total/free GB, core count, uptime,
+                            platform, hostname. CPU% is calculated as delta between
+                            two calls (call twice to get a real reading).
+    system:getActiveApp   → On Windows: PowerShell P/Invoke to GetForegroundWindow
+                            + GetWindowThreadProcessId → process name.
+                            On macOS: osascript to query System Events.
+    system:getCurrentWallpaper → Reads HKCU registry on Windows, osascript on Mac.
+    system:setWallpaper   → Calls SystemParametersInfo(SPI_SETDESKWALLPAPER) on
+                            Windows, osascript on Mac. Requires full image path.
+
+src/main/persistence.js
+  Reads and writes user data to Electron's userData directory
+  (%APPDATA%\atenttion-app\ on Windows). Two files:
+    atenttion-sessions.md   — Append-only Markdown table of completed sessions.
+                              Columns: Date, Time, Duration, Blinks, BPM, Away.
+    atenttion-preferences.md — YAML frontmatter + human-readable table.
+                              Read on startup; written whenever user saves settings.
+  IPC handlers: data:saveSession, data:savePreferences, data:loadPreferences,
+  data:getSessionsPath, data:getPrefsPath, data:getSessionCount.
+  Preferences are parsed from YAML frontmatter (custom parser — no yaml library).
+
+src/main/documents.js
+  File and URL → text conversion pipeline for the Documents page.
+  Strategy (in priority order):
+    1. .txt / .md files → fs.readFileSync directly
+    2. markitdown (Python subprocess) → handles PDF, DOCX, PPTX, XLSX, etc.
+    3. .html files → simple regex tag-stripping fallback
+    4. URLs → fetch() + HTML tag stripping (or markitdown if available)
+  IPC handlers: docs:checkDeps (Python version + markitdown installed?),
+  docs:installMarkitdown (runs pip install markitdown), docs:pickFile (dialog),
+  docs:convertFile, docs:convertUrl.
+
+════════════════════════════════════════
+ZUSTAND STORE
+════════════════════════════════════════
+
+src/renderer/src/store/index.js
+  Single flat Zustand store — the entire renderer state lives here.
+  Key slices:
+
+  Navigation:
+    page: 'focus' | 'stats' | 'system' | 'docs'
+
+  Preferences (persisted):
+    workDuration, shortBreakDuration, longBreakDuration (in seconds)
+    eyeAwayThresholdMs — how long user can look away before auto-pause (default 5000ms)
+    applyPreferences() — bulk-sets all from a loaded prefs object
+
+  Pomodoro:
+    pomodoroState: 'idle' | 'work' | 'break' | 'paused'
+    pomodoroMode: 'work' | 'short-break' | 'long-break'
+    timeLeft, sessionsCompleted
+
+  Eye tracking:
+    eyeTrackingActive, eyeStatus ('looking'|'away'|'blinking'|'unknown')
+    blinkCount — cumulative since tracker started
+    blinkRate  — blinks per minute, rolling 60-second window
+    blinkVariability — coefficient of variation (std/mean) of last 20 inter-blink
+                       intervals. null until 3+ blinks. Measures focus regularity.
+    lookingAwaySeconds — current away streak
+    totalLookingAwaySeconds — cumulative away time this session
+    modelLoaded, modelLoading — face-api model load state
+
+  Session history:
+    sessions[] — last 100 sessions, each: { date, duration, blinkCount, blinkRate,
+                 blinkVariability, focusScore, awaySeconds }
+    todayFocusSeconds — running total for today
+
+  Documents:
+    documents[] — { id, name, path, ext, content, addedAt }
+
+  System:
+    activeApp, systemInfo — polled from main process
+
+════════════════════════════════════════
+HOOKS
+════════════════════════════════════════
+
+src/renderer/src/hooks/useEyeTracker.js
+  Core eye tracking logic. Drives the face-api detection loop via
+  requestAnimationFrame at ~15fps.
+
+  Key constants:
+    EAR_THRESHOLD = 0.21   — Eye Aspect Ratio below this = eye is closed
+    BLINK_MIN_FRAMES = 2   — must stay closed for 2+ frames = counts as blink
+    MODEL_URL              — /models in dev, models://root in production
+
+  getEAR(eye) — Eye Aspect Ratio formula using 6 face landmarks per eye:
+    EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+    Lower EAR = more closed. Below 0.21 = blink.
+
+  Detection loop (runFrame):
+    - No face detected → start away timer; after threshold ms → eyeStatus='away',
+      auto-pause Pomodoro
+    - Face returns → add away time to total, auto-resume if we paused it
+    - Face detected → compute EAR for left + right eye, average them
+    - EAR below threshold → increment blink frame counter
+    - Frame count ≥ 2 and not already blinking → register blink:
+        * Increment blinkCount
+        * Record timestamp for BPM (count blinks in last 60s window)
+        * Compute inter-blink interval; if < 30s (filters gaze-away gaps):
+          append to intervals buffer (max 20); compute CV = std/mean → blinkVariability
+    - EAR above threshold → reset frame counter; set eyeStatus='looking'
+
+  Exposed: loadModels(), startTracking(), stopTracking()
+
+src/renderer/src/hooks/usePomodoro.js
+  Pomodoro timer state machine and session lifecycle management.
+
+  computeFocusScore(bpm, cv) — scientifically-grounded focus metric (0–100):
+    Rate component (55%):
+      BPM < 8  → 0 (eye strain danger)
+      BPM 8–12 → lerp 20→70 (caution range)
+      BPM 12–20 → 100 (optimal)
+      BPM > 20 → 80 (slightly elevated)
+    Rhythm component (45%):
+      CV < 0.40  → 100 (Regular — focused)
+      CV 0.40–0.70 → lerp 50→100 (Variable)
+      CV > 0.70  → lerp 0→50 (Irregular — distracted/fatigued)
+    Final: round(rateScore * 0.55 + rhythmScore * 0.45)
+    Formula grounded in PMC5742176 (BRV paper) + digital eye strain literature.
+
+  Timer: setInterval(1s) ticking timeLeft down. On expiry:
+    - Work session ends → build sessionData (blinks, BPM, CV, focusScore, awaySeconds)
+      → addSession() + saveSession() IPC → auto-start break
+    - Break ends → reset to work mode, idle state
+
+  Controls returned: start(), pause(), reset(), skip()
+    skip() saves a partial session if >60s of work elapsed.
+
+  Stale closure guard: all live values accessed via refs
+  (stateRef, blinkCountRef, blinkRateRef, blinkVariabilityRef, awaySecondsRef).
+
+════════════════════════════════════════
+COMPONENTS
+════════════════════════════════════════
+
+src/renderer/src/components/TitleBar.jsx
+  Custom window chrome for the frameless Electron window. Drag region covers
+  the full bar (WebkitAppRegion: drag). Buttons (no-drag region) call
+  window.api.window.minimize/maximize/close. Tracks maximized state to swap
+  the maximize icon.
+
+src/renderer/src/components/Sidebar.jsx
+  72px-wide vertical nav bar. Four nav items (Focus/Stats/System/Docs) each
+  rendered as a <button data-page={id}>. The data-page attribute is used by
+  the Playwright driver for reliable navigation (avoids lucide icon textContent
+  matching issues). Shows a color dot on Focus button when Pomodoro is running,
+  and an eye-status dot at the bottom (green/red pulsing/amber/grey).
+
+src/renderer/src/components/Pomodoro.jsx
+  SVG ring timer. Calculates progress as (1 - timeLeft/totalDuration) and
+  renders a circular progress ring using strokeDashoffset with a 1s CSS
+  transition. Mode badge and color scheme change per mode (violet=work,
+  emerald=short-break, cyan=long-break). Session dots show progress toward
+  the 4-session long-break cycle. Controls: reset, play/pause, skip.
+
+src/renderer/src/components/EyeTracker.jsx
+  Camera start/stop UI + live status display.
+  - Status pill: green/red/amber/grey based on eyeStatus, with auto-pause notice
+  - Stats row: blink count + BPM (BPM colored red/amber if below thresholds)
+  - Blink Rhythm panel: Regular (CV<0.40) / Variable / Irregular with tip text
+  - Blink rate health warning: danger (<8 BPM) or caution (<12 BPM) banner
+  - Toggle button: starts getUserMedia stream + face-api loop, or stops both
+  blinkRhythm(cv) and blinkRateStatus(bpm) are pure helper functions for display logic.
+
+src/renderer/src/components/Settings.jsx
+  Collapsible settings panel on FocusPage. Sliders for work/short-break/long-break
+  durations (1–60 min) and eye-away threshold (1–10s). Sliders are disabled while
+  timer is running. Save button writes to atenttion-preferences.md via IPC.
+  Shows data file paths once panel is opened.
+
+════════════════════════════════════════
+PAGES
+════════════════════════════════════════
+
+src/renderer/src/components/pages/FocusPage.jsx
+  Main landing page. Loads saved preferences on mount (window.api.data.loadPreferences).
+  Top row: today's focus time, sessions completed, blink count.
+  Main layout: Pomodoro ring (left) + EyeTracker + Settings panel (right column).
+
+src/renderer/src/components/pages/StatsPage.jsx
+  Session history and charts. Uses recharts.
+    - 4 summary cards: today's focus, sessions, avg BPM, total sessions
+    - Bar chart: focus duration per session (last 10)
+    - Line chart: BPM trend per session (last 10)
+    - Session table (last 8): Time, Duration, BPM, Rhythm (🟢/🟡/🔴),
+      Focus score (color-coded), Away time
+  Focus score and blink variability are displayed from session data saved at
+  session completion time (not live values).
+
+src/renderer/src/components/pages/SystemPage.jsx
+  System monitoring dashboard. Polls system info every 5s via setInterval.
+    - CPU usage bar (color: violet < 50%, amber < 80%, red ≥ 80%)
+    - Memory usage bar (color: emerald < 60%, amber < 80%, red ≥ 80%)
+    - Stats: CPU cores, platform, uptime
+    - Active application: foreground process name + recent history chips
+    - Wallpaper changer: text input for image path + Set/Restore buttons
+      (saves original wallpaper on mount so it can be restored)
+
+src/renderer/src/components/pages/DocumentsPage.jsx
+  Document ingestion UI. Checks Python/markitdown deps on mount.
+  Shows pip install button if Python found but markitdown missing.
+  Browse Files → system file dialog → converts each to text → addDocument().
+  Add URL → fetch/markitdown conversion → addDocument().
+  Documents stored in Zustand only (in-memory, not persisted across restarts).
+  DocCard component: file name, timestamp, char count, expand/collapse preview,
+  delete button.
+
+════════════════════════════════════════
+SCRIPTS
+════════════════════════════════════════
+
+scripts/dev.js
+  CRITICAL launcher. Must be used instead of running electron-vite directly.
+  Deletes process.env.ELECTRON_RUN_AS_NODE before spawning electron-vite dev.
+  Without this, Electron runs as a Node.js process (no window, no app API)
+  because Claude Code's shell always sets ELECTRON_RUN_AS_NODE=1.
+  Called by: npm run dev → node scripts/dev.js
+
+scripts/setup-models.js
+  Copies the 4 face-api model files (.bin + .json) from
+  node_modules/@vladmandic/face-api/model/ to src/renderer/public/models/.
+  Run automatically as a postinstall npm hook. Files are gitignored.
+  Models: tiny_face_detector_model + face_landmark_68_tiny_model (both tiny
+  variants for speed at ~15fps on CPU).
+
+scripts/driver.mjs
+  Playwright headless test driver. Launches the built Electron app (sets
+  ELECTRON_RUN_AS_NODE=undefined), waits for React mount, then drives:
+    1. Screenshot Focus page (default)
+    2. navigate('stats') → screenshot
+    3. navigate('system') → screenshot
+    4. navigate('docs') → screenshot
+    5. navigate('focus') → click Settings → screenshot
+  navigate(pageId) uses document.querySelector('[data-page="${id}"]') for
+  reliable button clicks (avoids SVG icon textContent matching failure).
+  Screenshots saved to C:/Users/Usuario/AppData/Local/Temp/atenttion-shots/
+
+════════════════════════════════════════
+MODEL FILES (generated, not in git)
+════════════════════════════════════════
+
+src/renderer/public/models/tiny_face_detector_model.bin
+src/renderer/public/models/tiny_face_detector_model-weights_manifest.json
+  Tiny MTCNN-based face detector. ~190KB. Used by face-api to find face bounding
+  boxes at low resolution quickly. scoreThreshold=0.4 is used to filter weak detections.
+
+src/renderer/public/models/face_landmark_68_tiny_model.bin
+src/renderer/public/models/face_landmark_68_tiny_model-weights_manifest.json
+  Tiny 68-point facial landmark model. ~350KB. Returns x,y coordinates for eyes,
+  nose, mouth, jawline. The eye landmarks (points 36–41 for left, 42–47 for right)
+  are used to compute Eye Aspect Ratio (EAR) for blink detection.
+
+════════════════════════════════════════
+THEORY & MEMORY FILES
+════════════════════════════════════════
+
+theoryLogic.md
+  Scientific foundation for all eye tracking metrics in the app. Synthesizes:
+    1. Wu & Liu (2022) — Eye-Mind Hypothesis: gaze aversion is normal during
+       deep cognitive work (~40% of engaged time). Informed the 5s away threshold
+       and framing of attention monitoring.
+    2. PMC5742176 — Blink Rate Variability (BRV) paper: CV of inter-blink
+       intervals predicts cognitive state better than raw blink count.
+       Defines the Regular/Variable/Irregular thresholds and Focus Score formula.
+  Read this file before changing any eye tracking thresholds or scoring logic.
+
+MEMORY.md (project root)
+  Running log of non-obvious decisions made across Claude sessions. Read at the
+  start of every session (referenced in CLAUDE.md). Contains: decisions with
+  rationale, known issues, environment notes, and key file pointers.
+
+CLAUDE.md
+  Project instructions for Claude Code. Explains the stack, file structure,
+  IPC channels, eye tracking pipeline, and the ELECTRON_RUN_AS_NODE workaround.
+  Claude reads this automatically at session start.
