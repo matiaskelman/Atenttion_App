@@ -11,6 +11,13 @@ export const createEyeTrackerSlice = (set) => ({
   modelLoading: false,
   camError: null,
   modelError: null,
+  liveEar: null,
+  earThreshold: null,
+  calibrationProgress: 0,
+  calibrationSampleCount: 0,
+  liveYaw: null,
+  livePitch: null,
+  liveJawOpen: null,
   setEyeTrackingActive: (v) => set({ eyeTrackingActive: v }),
   setEyeStatus: (s) => set({ eyeStatus: s }),
   setBlinkCount: (c) => set({ blinkCount: c }),
@@ -22,5 +29,12 @@ export const createEyeTrackerSlice = (set) => ({
   setModelLoaded: (v) => set({ modelLoaded: v }),
   setModelLoading: (v) => set({ modelLoading: v }),
   setModelError: (e) => set({ modelError: e }),
-  setCamError: (e) => set({ camError: e })
+  setCamError: (e) => set({ camError: e }),
+  setLiveEar: (v) => set({ liveEar: v }),
+  setEarThreshold: (v) => set({ earThreshold: v }),
+  setCalibrationProgress: (v) => set({ calibrationProgress: v }),
+  setCalibrationSampleCount: (v) => set({ calibrationSampleCount: v }),
+  setLiveYaw: (v) => set({ liveYaw: v }),
+  setLivePitch: (v) => set({ livePitch: v }),
+  setLiveJawOpen: (v) => set({ liveJawOpen: v })
 })

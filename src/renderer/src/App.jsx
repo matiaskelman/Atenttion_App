@@ -10,6 +10,7 @@ import FocusPage from './components/pages/FocusPage'
 import StatsPage from './components/pages/StatsPage'
 import SystemPage from './components/pages/SystemPage'
 import AudiosPage from './components/pages/AudiosPage'
+import EyeDebugPage from './components/pages/EyeDebugPage'
 import RitualModal from './components/RitualModal'
 
 export default function App() {
@@ -54,7 +55,7 @@ export default function App() {
   // Persistent video element ref — lives here so camera survives page navigation
   const videoRef = useRef(null)
   const streamRef = useRef(null)
-  const { loadModels, startTracking, stopTracking } = useEyeTracker(videoRef)
+  const { loadModels, startTracking, stopTracking, recalibrate } = useEyeTracker(videoRef)
 
   // Wallpaper refs — save original once, restore when focus ends
   const originalWallpaperRef = useRef(null)
@@ -194,7 +195,8 @@ export default function App() {
           {page === 'focus'  && <FocusPage pomodoroControls={pomodoroControls} eyeTrackerControls={eyeTrackerControls} />}
           {page === 'stats'  && <StatsPage />}
           {page === 'system' && <SystemPage />}
-          {page === 'audios' && <AudiosPage audioControls={audioControls} />}
+          {page === 'audios'    && <AudiosPage audioControls={audioControls} />}
+          {page === 'eyedebug' && <EyeDebugPage videoRef={videoRef} recalibrate={recalibrate} />}
         </main>
       </div>
       {showRitualModal && (

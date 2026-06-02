@@ -1,10 +1,10 @@
-import { Wind, Waves, Radio, Headphones, Music, Music2, Play, Pause, Volume1, Volume2, VolumeX } from 'lucide-react'
+import { Wind, Waves, Radio, Headphones, CloudRain, TreePine, Coffee, Play, Pause, Volume1, Volume2, VolumeX } from 'lucide-react'
 
 const AUDIO_TYPES = [
   {
     id: 'white',
     name: 'White Noise',
-    desc: 'Full-spectrum static — masks all background distractions equally',
+    desc: 'Smooth broadband mask — harsh highs filtered out for a cleaner, steadier sound',
     icon: Wind,
     accent: 'text-slate-300',
     activeBorder: 'border-slate-400/30',
@@ -13,26 +13,26 @@ const AUDIO_TYPES = [
     btnActive: 'bg-slate-400/20 hover:bg-slate-400/30 text-slate-200 border border-slate-400/20',
   },
   {
-    id: 'brown',
-    name: 'Brown Noise',
-    desc: 'Deep, warm rumble — easier on the ears for long sessions',
-    icon: Waves,
-    accent: 'text-amber-600',
-    activeBorder: 'border-amber-600/30',
-    activeBg: 'bg-amber-600/10',
-    dotColor: 'bg-amber-600',
-    btnActive: 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-600/20',
-  },
-  {
     id: 'pink',
     name: 'Pink Noise',
-    desc: 'Balanced 1/f spectrum — the most natural noise to the human ear',
+    desc: 'Smooth 1/f spectrum — warmer and gentler than white, closer to natural sound',
     icon: Radio,
     accent: 'text-pink-400',
     activeBorder: 'border-pink-500/30',
     activeBg: 'bg-pink-500/10',
     dotColor: 'bg-pink-400',
     btnActive: 'bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 border border-pink-500/20',
+  },
+  {
+    id: 'brown',
+    name: 'Brown Noise',
+    desc: 'Deep low-frequency rumble — easy on the ears for long sessions',
+    icon: Waves,
+    accent: 'text-amber-600',
+    activeBorder: 'border-amber-600/30',
+    activeBg: 'bg-amber-600/10',
+    dotColor: 'bg-amber-600',
+    btnActive: 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-600/20',
   },
   {
     id: 'lofi',
@@ -57,26 +57,37 @@ const AUDIO_TYPES = [
     btnActive: 'bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/20',
   },
   {
-    id: 'classical',
-    name: 'Classical',
-    desc: 'Gentle C-major / D-minor arpeggios — ascending and descending',
-    icon: Music,
-    accent: 'text-cyan-400',
-    activeBorder: 'border-cyan-500/30',
-    activeBg: 'bg-cyan-500/10',
-    dotColor: 'bg-cyan-400',
-    btnActive: 'bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/20',
+    id: 'rain',
+    name: 'Rain',
+    desc: 'Gentle rainfall — bandpass wash with natural intensity variation',
+    icon: CloudRain,
+    accent: 'text-sky-400',
+    activeBorder: 'border-sky-500/30',
+    activeBg: 'bg-sky-500/10',
+    dotColor: 'bg-sky-400',
+    btnActive: 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/20',
   },
   {
-    id: 'classical2',
-    name: 'Bach Prelude',
-    desc: 'I–V–vi–IV broken-chord arpeggios — calm, meditative, study-ready',
-    icon: Music2,
-    accent: 'text-teal-400',
-    activeBorder: 'border-teal-500/30',
-    activeBg: 'bg-teal-500/10',
-    dotColor: 'bg-teal-400',
-    btnActive: 'bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/20',
+    id: 'forest',
+    name: 'Forest',
+    desc: 'Wind through trees — deep gusts, leaf rustle, slow natural swells',
+    icon: TreePine,
+    accent: 'text-emerald-400',
+    activeBorder: 'border-emerald-500/30',
+    activeBg: 'bg-emerald-500/10',
+    dotColor: 'bg-emerald-400',
+    btnActive: 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/20',
+  },
+  {
+    id: 'cafe',
+    name: 'Café',
+    desc: 'Muffled chatter, soft clinking — cozy coffee shop ambience',
+    icon: Coffee,
+    accent: 'text-orange-400',
+    activeBorder: 'border-orange-500/30',
+    activeBg: 'bg-orange-500/10',
+    dotColor: 'bg-orange-400',
+    btnActive: 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/20',
   },
 ]
 
@@ -113,7 +124,7 @@ export default function AudiosPage({ audioControls }) {
         </p>
       </div>
 
-      {/* Volume control — directly under header */}
+      {/* Volume control */}
       <div className="card mb-5">
         <div className="flex items-center gap-3">
           <span className={`shrink-0 transition-colors ${volume === 0 ? 'text-neutral-600' : 'text-neutral-400'}`}>
@@ -139,7 +150,7 @@ export default function AudiosPage({ audioControls }) {
         )}
       </div>
 
-      {/* Audio cards — 2-column grid; last card spans both if count is odd */}
+      {/* Audio cards — 2-column grid */}
       <div className="grid grid-cols-2 gap-3">
         {AUDIO_TYPES.map((t, idx) => {
           const isPlaying = playing === t.id
@@ -154,7 +165,6 @@ export default function AudiosPage({ audioControls }) {
                   : 'border-surface-3'
               }`}
             >
-              {/* Header row */}
               <div className="flex items-start justify-between mb-3">
                 <div className={`flex items-center gap-2 ${isPlaying ? t.accent : 'text-neutral-400'} transition-colors`}>
                   <Icon size={16} />
@@ -168,10 +178,8 @@ export default function AudiosPage({ audioControls }) {
                 </div>
               </div>
 
-              {/* Description */}
               <p className="text-xs text-neutral-500 mb-4 leading-relaxed">{t.desc}</p>
 
-              {/* Play / Pause */}
               <button
                 onClick={() => play(t.id)}
                 className={`btn w-full ${isPlaying ? t.btnActive : 'btn-secondary'}`}
@@ -186,7 +194,6 @@ export default function AudiosPage({ audioControls }) {
         })}
       </div>
 
-      {/* Attribution */}
       <p className="text-[10px] text-neutral-700 text-center mt-5 leading-relaxed">
         All audio synthesised via Web Audio API — no external files, fully offline, no copyright.
       </p>
