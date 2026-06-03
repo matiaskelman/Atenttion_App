@@ -4,7 +4,7 @@ import { computeFocusScore } from '../utils/focusScore'
 import { playBeep } from '../utils/audio'
 
 const EAR_THRESHOLD         = 0.20
-const BLINK_MIN_FRAMES      = 3
+const BLINK_MIN_FRAMES      = 2
 const BLINK_MAX_FRAMES      = 15
 const YAW_THRESHOLD         = 0.55
 const PITCH_DOWN_MIN        = 0.50
@@ -27,8 +27,9 @@ const WASM_PATH  = import.meta.env.PROD ? 'models://root/mediapipe'          : '
 const MODEL_PATH = import.meta.env.PROD ? 'models://root/face_landmarker.task' : '/models/face_landmarker.task'
 
 // Module-level singleton: survives hook remounts so the landmarker is never lost.
-const landmarkerRef  = { current: null }
-const debugCanvasRef = { current: null }
+const landmarkerRef    = { current: null }
+const debugCanvasRef   = { current: null }
+export const earChartBufferRef = { current: [] }   // ring buffer for live EAR chart, decoupled from Zustand
 export function registerDebugCanvas(canvas) { debugCanvasRef.current = canvas }
 
 function dist(a, b) {
@@ -164,6 +165,10 @@ export function useEyeTracker(videoRef) {
         if (earBufferRef.current.length > EAR_SMOOTH_FRAMES) earBufferRef.current.shift()
         const ear = earBufferRef.current.reduce((a, b) => a + b, 0) / earBufferRef.current.length
 
+        // Chart buffer — write every face-detection frame, independent of Zustand subscriptions
+        earChartBufferRef.current.push({ ear, threshold: adaptiveThresholdRef.current })
+        if (earChartBufferRef.current.length > 300) earChartBufferRef.current.shift()
+
         // Silent adaptive calibration: build per-user threshold from first 10 s of open-eye readings
         const calElapsed = calibrationStartRef.current ? Date.now() - calibrationStartRef.current : Infinity
         if (calElapsed < CALIBRATION_WINDOW_MS) {
@@ -172,7 +177,7 @@ export function useEyeTracker(videoRef) {
           // Use 75th percentile of open-eye readings — robust to any eye size
           const sorted = [...calibrationSamplesRef.current].sort((a, b) => a - b)
           const p75    = sorted[Math.floor(sorted.length * 0.75)]
-          adaptiveThresholdRef.current = p75 * 0.70
+          adaptiveThresholdRef.current = p75 * 0.75
           openEyeEmaRef.current        = p75
           calibrationSamplesRef.current = []
         }
@@ -214,7 +219,7 @@ export function useEyeTracker(videoRef) {
                 openEyeEmaRef.current = openEyeEmaRef.current * 0.992 + ear * 0.008
               }
               if (++postCalFramesRef.current % 50 === 0) {
-                adaptiveThresholdRef.current = openEyeEmaRef.current * 0.70
+                adaptiveThresholdRef.current = openEyeEmaRef.current * 0.75
                 s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
               }
             }
@@ -310,6 +315,7 @@ export function useEyeTracker(videoRef) {
     poseGuardFramesRef.current    = 0
     openEyeEmaRef.current         = null
     postCalFramesRef.current      = 0
+    earChartBufferRef.current     = []
     s.setBlinkCount(0)
     s.setBlinkRate(0)
     s.setBlinkVariability(null)
@@ -356,6 +362,7 @@ export function useEyeTracker(videoRef) {
     calibrationStartRef.current   = Date.now()
     openEyeEmaRef.current         = null
     postCalFramesRef.current      = 0
+    earChartBufferRef.current     = []
     const s = useStore.getState()
     s.setCalibrationProgress(0)
     s.setCalibrationSampleCount(0)

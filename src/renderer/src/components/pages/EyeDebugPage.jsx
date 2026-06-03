@@ -3,7 +3,7 @@ import {
   LineChart, Line, ReferenceLine, XAxis, YAxis, ResponsiveContainer, Tooltip
 } from 'recharts'
 import { useStore } from '../../store'
-import { registerDebugCanvas } from '../../hooks/useEyeTracker'
+import { registerDebugCanvas, earChartBufferRef } from '../../hooks/useEyeTracker'
 
 const MAX_HISTORY = 300   // ~10 s at 30 fps
 const RENDER_INTERVAL = 100  // ms — throttle chart re-renders to ~10 fps
@@ -24,7 +24,7 @@ const concepts = [
   {
     title: 'Adaptive Calibration',
     body: 'A fixed threshold fails for many people — someone with naturally narrower eyes might have a resting EAR of 0.24, making 0.20 nearly useless for them. During the first 10 seconds, the app collects your open-eye EAR readings. The threshold is set to 70% of the 75th percentile of those readings (not the mean), which represents your "comfortably open" eye regardless of whether you have wide or narrow eyes.',
-    code: 'Threshold = 75th_percentile(open-eye EAR) × 0.70\n\nCalibration window: first 10 seconds\nMinimum samples needed: 30\nSample filter: EAR > 0.15 (covers all eye sizes)\nFallback if not enough data: 0.20 (static default)'
+    code: 'Threshold = 75th_percentile(open-eye EAR) × 0.75\n\nCalibration window: first 10 seconds\nMinimum samples needed: 30\nSample filter: EAR > 0.15 (covers all eye sizes)\nFallback if not enough data: 0.20 (static default)'
   },
   {
     title: 'Blink Detection Window (MIN / MAX Frames)',
@@ -141,9 +141,7 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
   const blinkVariability       = useStore((s) => s.blinkVariability)
   const blinkCount             = useStore((s) => s.blinkCount)
 
-  const canvasRef    = useRef(null)
-  const earHistoryRef = useRef([])
-  const renderTimer  = useRef(null)
+  const canvasRef = useRef(null)
   const [chartData, setChartData] = useState([])
 
   // Register / unregister the debug canvas
@@ -152,21 +150,20 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
     return () => registerDebugCanvas(null)
   }, [])
 
-  // Keep EAR history up to date and throttle chart re-renders
+  // Poll chart buffer on a fixed interval — decoupled from Zustand re-renders
   useEffect(() => {
-    if (liveEar === null) return
-    earHistoryRef.current.push({ t: earHistoryRef.current.length, ear: liveEar, threshold: earThreshold ?? 0.20 })
-    if (earHistoryRef.current.length > MAX_HISTORY) earHistoryRef.current.shift()
-    // Reassign t so indices stay contiguous after trimming
-    if (!renderTimer.current) {
-      renderTimer.current = setTimeout(() => {
-        setChartData(earHistoryRef.current.map((d, i) => ({ ...d, t: i })))
-        renderTimer.current = null
-      }, RENDER_INTERVAL)
-    }
-  }, [liveEar, earThreshold])
-
-  useEffect(() => () => { if (renderTimer.current) clearTimeout(renderTimer.current) }, [])
+    if (!eyeTrackingActive) return
+    const timer = setInterval(() => {
+      const buf = earChartBufferRef.current
+      if (buf.length === 0) return
+      setChartData(buf.map((d, i) => ({
+        t:         i,
+        ear:       Math.round(d.ear       * 1000) / 1000,
+        threshold: Math.round(d.threshold * 1000) / 1000
+      })))
+    }, RENDER_INTERVAL)
+    return () => clearInterval(timer)
+  }, [eyeTrackingActive])
 
   const statusColors = {
     looking:      'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
@@ -184,13 +181,12 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
   const pitchSuppressed = livePitch !== null && (livePitch < 0.50 || livePitch > 2.50)
   const jawSuppressed = liveJawOpen !== null && liveJawOpen > 0.15
 
-  const calMeanEar = earThreshold !== null ? (earThreshold / 0.70).toFixed(3) : null
+  const calMeanEar = earThreshold !== null ? (earThreshold / 0.75).toFixed(3) : null
   const calibrated = calibrationProgress >= 100 && earThreshold !== null && earThreshold !== 0.20
 
   const earZone = getEarZone(liveEar)
 
   const handleRecalibrate = useCallback(() => {
-    earHistoryRef.current = []
     setChartData([])
     recalibrate()
   }, [recalibrate])
@@ -325,7 +321,7 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
           </div>
           <div className="flex justify-between text-neutral-400">
             <span>Adaptive threshold</span>
-            <span className="text-violet-300 font-mono">{earThreshold !== null ? earThreshold.toFixed(3) : '—'}<span className="text-neutral-600 ml-1">(p75 × 0.70)</span></span>
+            <span className="text-violet-300 font-mono">{earThreshold !== null ? earThreshold.toFixed(3) : '—'}<span className="text-neutral-600 ml-1">(p75 × 0.75)</span></span>
           </div>
           <div className="flex justify-between text-neutral-400">
             <span>Static fallback</span>
