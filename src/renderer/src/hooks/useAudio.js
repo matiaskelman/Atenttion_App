@@ -110,160 +110,6 @@ function generateBrownNoise(ctx) {
   return buf
 }
 
-// Rain: bandpass noise wash + sparse drop impacts + intensity swell
-// Modulation frequencies are integer multiples of 1/12 Hz so the 12 s loop seam is phase-aligned.
-function generateRain(ctx) {
-  const sr = ctx.sampleRate
-  const seconds = 12
-  const total = sr * seconds
-  const buf = ctx.createBuffer(2, total, sr)
-  const L = buf.getChannelData(0)
-  const R = buf.getChannelData(1)
-
-  // Bandpass noise: LP at 4500 Hz then HP at 150 Hz — warm rain wash
-  const lpA = Math.exp(-2 * Math.PI * 4500 / sr)
-  const hpA = Math.exp(-2 * Math.PI * 150  / sr)
-  let lpL=0, lpR=0, hpL=0, hpR=0, prevLpL=0, prevLpR=0
-  for (let i = 0; i < total; i++) {
-    const wL = Math.random() * 2 - 1
-    const wR = Math.random() * 2 - 1
-    lpL = (1-lpA)*wL + lpA*lpL;  lpR = (1-lpA)*wR + lpA*lpR
-    hpL = lpL - prevLpL + hpA*hpL;  hpR = lpR - prevLpR + hpA*hpR
-    prevLpL = lpL;  prevLpR = lpR
-    L[i] = hpL;  R[i] = hpR
-  }
-
-  // Gentle intensity swell — two harmonics of 1/12 Hz (complete cycles, seamless)
-  for (let i = 0; i < total; i++) {
-    const t = i / sr
-    const mod = 0.82 + 0.12 * Math.sin(2 * Math.PI * (1/12) * t)
-              + 0.06 * Math.sin(2 * Math.PI * (2/12) * t + Math.PI * 0.5)
-    L[i] *= mod;  R[i] *= mod
-  }
-
-  // Sparse heavy-drop impacts for texture
-  for (let d = 0; d < 50; d++) {
-    const pos   = Math.floor(Math.random() * (total - sr * 0.04))
-    const amp   = 0.06 + Math.random() * 0.14
-    const decay = 250  + Math.random() * 400
-    const dur   = Math.round(sr * (0.01 + Math.random() * 0.025))
-    const pan   = 0.3  + Math.random() * 0.7
-    for (let j = 0; j < dur && pos+j < total; j++) {
-      const s = (Math.random() * 2 - 1) * Math.exp(-j/sr * decay) * amp
-      L[pos+j] += s * (1 - pan*0.3);  R[pos+j] += s * pan
-    }
-  }
-
-  normalizeBuffer(buf, 0.80)
-  return buf
-}
-
-// Forest: low-frequency wind (triple LP cascade) + mid-frequency leaf rustle + gust envelope
-// Same seamless-loop trick: modulation at 1/12 and 2/12 Hz for a 12 s buffer.
-function generateForest(ctx) {
-  const sr = ctx.sampleRate
-  const seconds = 12
-  const total = sr * seconds
-  const buf = ctx.createBuffer(2, total, sr)
-  const L = buf.getChannelData(0)
-  const R = buf.getChannelData(1)
-
-  // Wind base: three cascaded LP passes at ~500 Hz — deep, airy rush
-  const wlpA = Math.exp(-2 * Math.PI * 500 / sr)
-  let wL1=0, wL2=0, wL3=0,  wR1=0, wR2=0, wR3=0
-  for (let i = 0; i < total; i++) {
-    const rL = Math.random() * 2 - 1
-    const rR = Math.random() * 2 - 1
-    wL1 = (1-wlpA)*rL  + wlpA*wL1;  wL2 = (1-wlpA)*wL1 + wlpA*wL2;  wL3 = (1-wlpA)*wL2 + wlpA*wL3
-    wR1 = (1-wlpA)*rR  + wlpA*wR1;  wR2 = (1-wlpA)*wR1 + wlpA*wR2;  wR3 = (1-wlpA)*wR2 + wlpA*wR3
-    L[i] = wL3;  R[i] = wR3
-  }
-
-  // Leaf rustle: bandpass 700–3000 Hz mixed at 28 %
-  const llpA = Math.exp(-2 * Math.PI * 3000 / sr)
-  const lhpA = Math.exp(-2 * Math.PI * 700  / sr)
-  let llpL=0, lhpL=0, lpPrevL=0,  llpR=0, lhpR=0, lpPrevR=0
-  for (let i = 0; i < total; i++) {
-    const rL = Math.random() * 2 - 1
-    const rR = Math.random() * 2 - 1
-    llpL = (1-llpA)*rL  + llpA*llpL;  lhpL = llpL - lpPrevL + lhpA*lhpL;  lpPrevL = llpL
-    llpR = (1-llpA)*rR  + llpA*llpR;  lhpR = llpR - lpPrevR + lhpA*lhpR;  lpPrevR = llpR
-    L[i] += lhpL * 0.28;  R[i] += lhpR * 0.28
-  }
-
-  // Gust envelope — two harmonics of 1/12 Hz (seamless)
-  for (let i = 0; i < total; i++) {
-    const t = i / sr
-    const gust = 0.55 + 0.30 * Math.sin(2 * Math.PI * (1/12) * t)
-               + 0.15 * Math.sin(2 * Math.PI * (2/12) * t + Math.PI * 0.3)
-    L[i] *= gust;  R[i] *= gust
-  }
-
-  normalizeBuffer(buf, 0.78)
-  return buf
-}
-
-// Café: muffled chatter (double LP + HP) + conversation bursts + sparse clinks
-// 16 s buffer; modulation at 1/16 and 2/16 Hz for a seamless loop.
-function generateCafe(ctx) {
-  const sr = ctx.sampleRate
-  const seconds = 16
-  const total = sr * seconds
-  const buf = ctx.createBuffer(2, total, sr)
-  const L = buf.getChannelData(0)
-  const R = buf.getChannelData(1)
-
-  // Muffled chatter base: double LP (2000 → 900 Hz) + HP at 200 Hz
-  const lp1A = Math.exp(-2 * Math.PI * 2000 / sr)
-  const lp2A = Math.exp(-2 * Math.PI * 900  / sr)
-  const hpA  = Math.exp(-2 * Math.PI * 200  / sr)
-  let lp1L=0, lp2L=0, hpL=0, prevLp2L=0
-  let lp1R=0, lp2R=0, hpR=0, prevLp2R=0
-  for (let i = 0; i < total; i++) {
-    const wL = Math.random() * 2 - 1
-    const wR = Math.random() * 2 - 1
-    lp1L=(1-lp1A)*wL+lp1A*lp1L; lp2L=(1-lp2A)*lp1L+lp2A*lp2L; hpL=lp2L-prevLp2L+hpA*hpL; prevLp2L=lp2L
-    lp1R=(1-lp1A)*wR+lp1A*lp1R; lp2R=(1-lp2A)*lp1R+lp2A*lp2R; hpR=lp2R-prevLp2R+hpA*hpR; prevLp2R=lp2R
-    L[i] = hpL * 0.7;  R[i] = hpR * 0.7
-  }
-
-  // Conversation bursts — voices rising and falling in level
-  for (let b = 0; b < 18; b++) {
-    const pos = Math.floor(Math.random() * (total - sr))
-    const dur = Math.round(sr * (0.3 + Math.random() * 0.7))
-    const amp = 0.15 + Math.random() * 0.25
-    for (let j = 0; j < dur && pos+j < total; j++) {
-      const env = Math.sin(Math.PI * j / dur)
-      L[pos+j] += (Math.random() * 2 - 1) * env * amp * 0.6
-      R[pos+j] += (Math.random() * 2 - 1) * env * amp * 0.6
-    }
-  }
-
-  // Cup / glass clinks — sparse, subtle
-  for (let c = 0; c < 6; c++) {
-    const pos = Math.floor(Math.random() * (total - sr * 0.15))
-    const f   = 1400 + Math.random() * 1800
-    const dur = Math.round(sr * 0.14)
-    for (let j = 0; j < dur && pos+j < total; j++) {
-      const t = j / sr
-      const env = Math.exp(-t * 22) * 0.10
-      L[pos+j] += Math.sin(2 * Math.PI * f          * t) * env
-      R[pos+j] += Math.sin(2 * Math.PI * (f * 1.012) * t) * env
-    }
-  }
-
-  // Activity swell — two harmonics of 1/16 Hz (seamless)
-  for (let i = 0; i < total; i++) {
-    const t = i / sr
-    const mod = 0.80 + 0.14 * Math.sin(2 * Math.PI * (1/16) * t)
-              + 0.06 * Math.sin(2 * Math.PI * (2/16) * t + Math.PI * 0.6)
-    L[i] *= mod;  R[i] *= mod
-  }
-
-  normalizeBuffer(buf, 0.75)
-  return buf
-}
-
 // LoFi beat: 80 BPM — vinyl hiss reduced for a smoother listen
 function generateLofiBeat(ctx) {
   const sr = ctx.sampleRate
@@ -437,7 +283,7 @@ function generateLofiBeat2(ctx) {
   return buf
 }
 
-// ─── Generator map ────────────────────────────────────────────────────────────
+// ─── Generator map & file-based sounds ───────────────────────────────────────
 
 const GENERATORS = {
   white:  generateWhiteNoise,
@@ -445,9 +291,16 @@ const GENERATORS = {
   brown:  generateBrownNoise,
   lofi:   generateLofiBeat,
   lofi2:  generateLofiBeat2,
-  rain:   generateRain,
-  forest: generateForest,
-  cafe:   generateCafe,
+}
+
+const FILE_SOUNDS = new Set(['rain', 'forest', 'cafe'])
+const SOUND_BASE  = import.meta.env.PROD ? 'sounds://root' : '/sounds'
+
+async function loadSoundFile(ctx, name) {
+  const response = await fetch(`${SOUND_BASE}/${name}.mp3`)
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const arrayBuffer = await response.arrayBuffer()
+  return ctx.decodeAudioData(arrayBuffer)
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -496,7 +349,14 @@ export function useAudio() {
     const ctx = getCtx()
 
     if (!buffersRef.current[type]) {
-      buffersRef.current[type] = GENERATORS[type](ctx)
+      try {
+        buffersRef.current[type] = FILE_SOUNDS.has(type)
+          ? await loadSoundFile(ctx, type)
+          : GENERATORS[type](ctx)
+      } catch (err) {
+        console.error(`[audio] failed to load ${type}:`, err)
+        return
+      }
     }
 
     const source = ctx.createBufferSource()

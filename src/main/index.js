@@ -7,7 +7,8 @@ import { setupPersistenceIPC } from './persistence'
 
 // Must register before app.whenReady()
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'models', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } }
+  { scheme: 'models', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } },
+  { scheme: 'sounds', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } },
 ])
 
 function createWindow() {
@@ -184,6 +185,22 @@ app.whenReady().then(() => {
       })
     } catch (e) {
       console.error('[models protocol] not found:', absolutePath)
+      return new Response('Not found', { status: 404 })
+    }
+  })
+
+  protocol.handle('sounds', async (request) => {
+    const url = new URL(request.url)
+    const filePath = decodeURIComponent(url.pathname.slice(1))
+    const basePath = app.isPackaged
+      ? join(process.resourcesPath, 'app.asar.unpacked', 'out', 'renderer', 'sounds')
+      : join(__dirname, '../renderer/sounds')
+    const absolutePath = join(basePath, filePath)
+    try {
+      const data = await readFile(absolutePath)
+      return new Response(data, { headers: { 'Content-Type': 'audio/mpeg' } })
+    } catch (e) {
+      console.error('[sounds protocol] not found:', absolutePath)
       return new Response('Not found', { status: 404 })
     }
   })

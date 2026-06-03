@@ -56,6 +56,8 @@ export function useEyeTracker(videoRef) {
   const adaptiveThresholdRef   = useRef(EAR_THRESHOLD)
   const calibrationStartRef    = useRef(null)
   const poseGuardFramesRef     = useRef(0)
+  const openEyeEmaRef          = useRef(null)
+  const postCalFramesRef       = useRef(0)
 
   const loadModels = useCallback(async () => {
     const s = useStore.getState()
@@ -171,6 +173,7 @@ export function useEyeTracker(videoRef) {
           const sorted = [...calibrationSamplesRef.current].sort((a, b) => a - b)
           const p75    = sorted[Math.floor(sorted.length * 0.75)]
           adaptiveThresholdRef.current = p75 * 0.70
+          openEyeEmaRef.current        = p75
           calibrationSamplesRef.current = []
         }
 
@@ -203,6 +206,19 @@ export function useEyeTracker(videoRef) {
           const earValid = rawEar >= EAR_VALID_MIN && rawEar <= EAR_VALID_MAX
 
           if (earValid) {
+            // Post-calibration EMA: keep threshold aligned with resting EAR as head pose changes
+            if (calElapsed >= CALIBRATION_WINDOW_MS && !isBlinkingRef.current && ear > adaptiveThresholdRef.current) {
+              if (openEyeEmaRef.current === null) {
+                openEyeEmaRef.current = ear
+              } else {
+                openEyeEmaRef.current = openEyeEmaRef.current * 0.992 + ear * 0.008
+              }
+              if (++postCalFramesRef.current % 50 === 0) {
+                adaptiveThresholdRef.current = openEyeEmaRef.current * 0.70
+                s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
+              }
+            }
+
             const openThreshold = adaptiveThresholdRef.current + EAR_HYSTERESIS
 
             if (ear < adaptiveThresholdRef.current) {
@@ -292,6 +308,8 @@ export function useEyeTracker(videoRef) {
     adaptiveThresholdRef.current  = EAR_THRESHOLD
     calibrationStartRef.current   = Date.now()
     poseGuardFramesRef.current    = 0
+    openEyeEmaRef.current         = null
+    postCalFramesRef.current      = 0
     s.setBlinkCount(0)
     s.setBlinkRate(0)
     s.setBlinkVariability(null)
@@ -319,6 +337,8 @@ export function useEyeTracker(videoRef) {
     adaptiveThresholdRef.current  = EAR_THRESHOLD
     calibrationStartRef.current   = null
     poseGuardFramesRef.current    = 0
+    openEyeEmaRef.current         = null
+    postCalFramesRef.current      = 0
 
     const s = useStore.getState()
     s.setEyeTrackingActive(false)
@@ -334,6 +354,8 @@ export function useEyeTracker(videoRef) {
     calibrationSamplesRef.current = []
     adaptiveThresholdRef.current  = EAR_THRESHOLD
     calibrationStartRef.current   = Date.now()
+    openEyeEmaRef.current         = null
+    postCalFramesRef.current      = 0
     const s = useStore.getState()
     s.setCalibrationProgress(0)
     s.setCalibrationSampleCount(0)

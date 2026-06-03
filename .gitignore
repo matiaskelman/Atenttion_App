@@ -4,3 +4,4 @@ dist
 .DS_Store
 *.log
 src/renderer/public/models
+src/renderer/public/sounds
