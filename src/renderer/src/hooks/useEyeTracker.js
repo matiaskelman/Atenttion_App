@@ -16,8 +16,10 @@ const EAR_HYSTERESIS        = 0.02   // dead zone above threshold to prevent osc
 const EAR_SPIKE_LIMIT       = 0.12   // max frame-to-frame EAR delta — clamps occlusion spikes
 const EAR_VALID_MIN         = 0.05   // below this = bad frame (hand/occlusion)
 const EAR_VALID_MAX         = 0.60   // above this = bad frame
-const TALK_THRESHOLD        = 0.15   // jaw-open ratio (lip gap / eye span) — suppress while talking
+const TALK_THRESHOLD        = 0.22   // jaw-open ratio (lip gap / eye span) — suppress while talking
 const POSE_GUARD_FRAMES     = 3      // consecutive bad-pose frames before suppression kicks in
+const ALPHA_SLOW            = 0.008  // EMA rate during normal tracking (~86-frame half-life, 2.8s)
+const ALPHA_FAST            = 0.030  // EMA rate when eye is clearly stable (~23-frame half-life, 0.8s)
 
 // MediaPipe 478-point mesh — 6 EAR landmarks per eye
 const L_EYE = [362, 385, 387, 263, 373, 380]
@@ -59,6 +61,7 @@ export function useEyeTracker(videoRef) {
   const poseGuardFramesRef     = useRef(0)
   const openEyeEmaRef          = useRef(null)
   const postCalFramesRef       = useRef(0)
+  const stableOpenFramesRef    = useRef(0)
 
   const loadModels = useCallback(async () => {
     const s = useStore.getState()
@@ -149,8 +152,16 @@ export function useEyeTracker(videoRef) {
         // Jaw open ratio — lm[13] = upper inner lip, lm[14] = lower inner lip
         const jawOpenRatio = eyeSpan > 0 ? Math.abs(lm[13].y - lm[14].y) / eyeSpan : 0
 
-        // Compute raw EAR
-        const rawEar = (getEAR(lm, L_EYE, w, h) + getEAR(lm, R_EYE, w, h)) / 2
+        // Compute raw EAR — weight toward the far eye when head is yawed (near eye is foreshortened)
+        const leftEAR  = getEAR(lm, L_EYE, w, h)
+        const rightEAR = getEAR(lm, R_EYE, w, h)
+        const noseMidOffset = noseTipX - (leftEyeCX + rightEyeCX) / 2
+        const farWeight = yawRatio < 0.20 ? 0.5
+          : Math.min(0.80, 0.5 + (yawRatio - 0.20) / (YAW_THRESHOLD - 0.20) * 0.30)
+        const nearWeight = 1 - farWeight
+        const rawEar = noseMidOffset >= 0
+          ? leftEAR * farWeight  + rightEAR * nearWeight
+          : leftEAR * nearWeight + rightEAR * farWeight
 
         // EAR spike clamp — prevents occlusion-induced spikes from corrupting the buffer
         const bufferMean = earBufferRef.current.length > 0
@@ -211,12 +222,17 @@ export function useEyeTracker(videoRef) {
           const earValid = rawEar >= EAR_VALID_MIN && rawEar <= EAR_VALID_MAX
 
           if (earValid) {
-            // Post-calibration EMA: keep threshold aligned with resting EAR as head pose changes
-            if (calElapsed >= CALIBRATION_WINDOW_MS && !isBlinkingRef.current && ear > adaptiveThresholdRef.current) {
+            // Post-calibration EMA: keep threshold aligned with resting EAR as head pose changes.
+            // Guard is absolute floor (CALIBRATION_OPEN_MIN) rather than adaptive threshold so the
+            // EMA can recover even when resting EAR has drifted below the current threshold.
+            if (calElapsed >= CALIBRATION_WINDOW_MS && ear > CALIBRATION_OPEN_MIN) {
               if (openEyeEmaRef.current === null) {
                 openEyeEmaRef.current = ear
               } else {
-                openEyeEmaRef.current = openEyeEmaRef.current * 0.992 + ear * 0.008
+                const nearEma = ear > openEyeEmaRef.current * 0.88
+                stableOpenFramesRef.current = nearEma ? stableOpenFramesRef.current + 1 : 0
+                const alpha = stableOpenFramesRef.current > 30 ? ALPHA_FAST : ALPHA_SLOW
+                openEyeEmaRef.current = openEyeEmaRef.current * (1 - alpha) + ear * alpha
               }
               if (++postCalFramesRef.current % 50 === 0) {
                 adaptiveThresholdRef.current = openEyeEmaRef.current * 0.75
@@ -315,6 +331,7 @@ export function useEyeTracker(videoRef) {
     poseGuardFramesRef.current    = 0
     openEyeEmaRef.current         = null
     postCalFramesRef.current      = 0
+    stableOpenFramesRef.current   = 0
     earChartBufferRef.current     = []
     s.setBlinkCount(0)
     s.setBlinkRate(0)
@@ -345,6 +362,7 @@ export function useEyeTracker(videoRef) {
     poseGuardFramesRef.current    = 0
     openEyeEmaRef.current         = null
     postCalFramesRef.current      = 0
+    stableOpenFramesRef.current   = 0
 
     const s = useStore.getState()
     s.setEyeTrackingActive(false)
@@ -362,6 +380,7 @@ export function useEyeTracker(videoRef) {
     calibrationStartRef.current   = Date.now()
     openEyeEmaRef.current         = null
     postCalFramesRef.current      = 0
+    stableOpenFramesRef.current   = 0
     earChartBufferRef.current     = []
     const s = useStore.getState()
     s.setCalibrationProgress(0)
