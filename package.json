@@ -52,6 +52,13 @@
         "NSCameraUsageDescription": "Atenttion uses the camera for real-time eye tracking to detect focus and blink rate.",
         "NSMicrophoneUsageDescription": "Microphone access is not used by Atenttion."
       }
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "matiaskelman",
+        "repo": "Atenttion_App"
+      }
+    ]
   }
 }
