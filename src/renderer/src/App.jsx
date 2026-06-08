@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Matias Kelman. All rights reserved.
 import { useEffect, useRef, useCallback } from 'react'
 import { useStore } from './store'
 import { usePomodoro } from './hooks/usePomodoro'

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Matias Kelman. All rights reserved.
 import { contextBridge, ipcRenderer } from 'electron'
 
 const api = {

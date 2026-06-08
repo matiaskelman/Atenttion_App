@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Matias Kelman. All rights reserved.
 import { app, BrowserWindow, ipcMain, shell, protocol, session, screen } from 'electron'
 import { join } from 'path'
 import { readFile } from 'fs/promises'
