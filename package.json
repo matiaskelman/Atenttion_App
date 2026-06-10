@@ -2,6 +2,10 @@
   "name": "atenttion-app",
   "version": "1.0.0",
   "description": "Focus tracker with eye tracking, pomodoro, and system monitoring",
+  "author": {
+    "name": "Matias Kelman",
+    "url": "https://github.com/matiaskelman"
+  },
   "main": "out/main/index.js",
   "scripts": {
     "dev": "node scripts/dev.js",
