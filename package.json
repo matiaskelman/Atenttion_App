@@ -51,7 +51,10 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": "dmg",
+      "target": {
+        "target": "dmg",
+        "arch": ["universal"]
+      },
       "extendInfo": {
         "NSCameraUsageDescription": "Atenttion uses the camera for real-time eye tracking to detect focus and blink rate.",
         "NSMicrophoneUsageDescription": "Microphone access is not used by Atenttion."
