@@ -137,6 +137,8 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
   const liveYaw                = useStore((s) => s.liveYaw)
   const livePitch              = useStore((s) => s.livePitch)
   const liveJawOpen            = useStore((s) => s.liveJawOpen)
+  const liveGaze               = useStore((s) => s.liveGaze)
+  const phoneScorePct          = useStore((s) => s.phoneScorePct)
   const blinkRate              = useStore((s) => s.blinkRate)
   const blinkVariability       = useStore((s) => s.blinkVariability)
   const blinkCount             = useStore((s) => s.blinkCount)
@@ -342,6 +344,8 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
         <StatBox label="Threshold" value={earThreshold?.toFixed(3)} />
         <StatBox label="Yaw"   value={liveYaw?.toFixed(2)}    highlight={yawSuppressed} />
         <StatBox label="Pitch" value={livePitch?.toFixed(2)}  highlight={pitchSuppressed} />
+        <StatBox label="Gaze"  value={liveGaze?.toFixed(3)} />
+        <StatBox label="Phone" value={phoneScorePct > 0 ? `${phoneScorePct}%` : '—'} warning={phoneScorePct > 0} />
         <StatBox label="Jaw"   value={liveJawOpen?.toFixed(2)} warning={jawSuppressed} />
         <StatBox label="BPM"   value={blinkRate || '—'} />
         <div className="flex-1 rounded-xl p-3 flex flex-col gap-1 bg-surface-2">

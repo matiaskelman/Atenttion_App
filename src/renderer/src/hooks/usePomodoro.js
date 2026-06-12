@@ -13,6 +13,7 @@ export function usePomodoro() {
   const timeLeftAtStartRef = useRef(null)
   const awayStartRef = useRef(0)
   const sessionStartBlinkRef = useRef(0)
+  const phonePickupsStartRef = useRef(0)
   const lastSessionEndedAtRef = useRef(0)
   const ritualDataRef = useRef(null)   // goal+mood captured at confirmPreRitual; lives for the whole block
   // Holds completed session data between work-end and post-ritual confirmation
@@ -75,6 +76,7 @@ export function usePomodoro() {
             blinkVariability: cv,
             focusScore,
             awaySeconds: s.totalLookingAwaySeconds - awayStartRef.current,
+            phonePickups: s.phonePickupsTotal - phonePickupsStartRef.current,
             appUsage: { ...s.appUsageFocus }
           }
 
@@ -128,6 +130,7 @@ export function usePomodoro() {
           s.setTimeLeft(s.workDuration)
           sessionStartBlinkRef.current = s.blinkCount
           awayStartRef.current = s.totalLookingAwaySeconds
+          phonePickupsStartRef.current = s.phonePickupsTotal
           s.setPomodoroState('work')
           setTimeout(() => startTimer(), 50)
         } else {
@@ -151,6 +154,7 @@ export function usePomodoro() {
     s.setShowRitualModal(false)
     sessionStartBlinkRef.current = s.blinkCount
     awayStartRef.current = s.totalLookingAwaySeconds
+    phonePickupsStartRef.current = s.phonePickupsTotal
     s.setPomodoroState('work')
     startTimer()
   }, [startTimer])
@@ -215,6 +219,7 @@ export function usePomodoro() {
         }
         sessionStartBlinkRef.current = s.blinkCount
         awayStartRef.current = s.totalLookingAwaySeconds
+        phonePickupsStartRef.current = s.phonePickupsTotal
       }
       s.setPomodoroState('work')
       startTimer()
@@ -254,6 +259,7 @@ export function usePomodoro() {
           blinkVariability: cv,
           focusScore: computeFocusScore(s.blinkRate, cv),
           awaySeconds: s.totalLookingAwaySeconds - awayStartRef.current,
+          phonePickups: s.phonePickupsTotal - phonePickupsStartRef.current,
           appUsage: { ...s.appUsageFocus },
           ...(rd ? { ritual: true, goal: rd.goal, moodBefore: rd.moodBefore } : {})
         }

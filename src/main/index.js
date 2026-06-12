@@ -127,6 +127,39 @@ function createWindow() {
     overlayWindow.webContents.send('overlay:dismiss')
   })
 
+  // Phone morph: the ring is bottom-anchored in the overlay document and the window
+  // resize is bottom-right anchored, so growing/shrinking the window doesn't move the
+  // ring on screen — the CSS morph is the only visible motion.
+  let phoneShrinkTimer = null
+  ipcMain.on('overlay:phone-detected', (_, active) => {
+    if (overlayWindow.isDestroyed()) return
+    if (phoneShrinkTimer) { clearTimeout(phoneShrinkTimer); phoneShrinkTimer = null }
+    const [x, y] = overlayWindow.getPosition()
+    const [w, h] = overlayWindow.getSize()
+    const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize
+    if (active) {
+      // Grow the window first so the morph animates inside it
+      overlayWindow.setSize(100, 190)
+      const newX = Math.max(0, Math.min(x + w - 100, sw - 100))
+      const newY = Math.max(0, Math.min(y + h - 190, sh - 190))
+      overlayWindow.setPosition(newX, newY)
+      overlayWindow.webContents.send('overlay:phone-detected', true)
+    } else {
+      // Morph back first, shrink the window once the 450ms transition has finished
+      overlayWindow.webContents.send('overlay:phone-detected', false)
+      phoneShrinkTimer = setTimeout(() => {
+        phoneShrinkTimer = null
+        if (overlayWindow.isDestroyed()) return
+        const [x2, y2] = overlayWindow.getPosition()
+        const [w2, h2] = overlayWindow.getSize()
+        overlayWindow.setSize(100, 100)
+        const newX = Math.max(0, Math.min(x2 + w2 - 100, sw - 100))
+        const newY = Math.max(0, Math.min(y2 + h2 - 100, sh - 100))
+        overlayWindow.setPosition(newX, newY)
+      }, 520)
+    }
+  })
+
   ipcMain.on('overlay:rating', (_, rating) => {
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send('overlay:rating-result', rating)

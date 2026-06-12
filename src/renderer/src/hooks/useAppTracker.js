@@ -24,15 +24,22 @@ export function useAppTracker() {
 
       // Read pomodoroState AFTER the await — the PowerShell call takes 2-3s
       // and the state can change (e.g. work → break) during that time
-      const { pomodoroState } = useStore.getState()
+      const { pomodoroState, phoneDetected } = useStore.getState()
       const isActive = pomodoroState === 'work' || pomodoroState === 'break'
+      // Phone-paused time counts against the focus session as its own "Phone" entry —
+      // the desktop foreground app is irrelevant while the user is on the phone
+      const isPhonePause = pomodoroState === 'paused' && phoneDetected
 
-      if (isActive && app && app !== 'Unknown' && lastPollTimeRef.current !== null) {
+      if (lastPollTimeRef.current !== null) {
         const elapsed = Math.min((now - lastPollTimeRef.current) / 1000, 4)
-        recordAppUsage(app, pomodoroState === 'work' ? 'focus' : 'break', elapsed)
+        if (isPhonePause) {
+          recordAppUsage('Phone', 'focus', elapsed)
+        } else if (isActive && app && app !== 'Unknown') {
+          recordAppUsage(app, pomodoroState === 'work' ? 'focus' : 'break', elapsed)
+        }
       }
 
-      lastPollTimeRef.current = isActive ? now : null
+      lastPollTimeRef.current = (isActive || isPhonePause) ? now : null
     }
 
     const interval = setInterval(poll, 2000)

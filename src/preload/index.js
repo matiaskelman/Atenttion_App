@@ -45,6 +45,7 @@ const api = {
     update: (data) => ipcRenderer.send('overlay:update', data),
     showFeedback: (goal) => ipcRenderer.send('overlay:show-feedback', goal),
     dismissFeedback: () => ipcRenderer.send('overlay:dismiss-feedback'),
+    phoneDetected: (active) => ipcRenderer.send('overlay:phone-detected', active),
     onRating: (cb) => {
       const handler = (_, rating) => cb(rating)
       ipcRenderer.on('overlay:rating-result', handler)

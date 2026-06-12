@@ -42,7 +42,7 @@ export default function App() {
   // Auto-dismiss post-ritual modal after 10 s with no response
   useEffect(() => {
     if (!showRitualModal || ritualPhase !== 'post') return
-    const timer = setTimeout(() => pomodoroControls.confirmPostRitual(null), 10000)
+    const timer = setTimeout(() => pomodoroControls.confirmPostRitual(null), 60000)
     return () => clearTimeout(timer)
   }, [showRitualModal, ritualPhase, pomodoroControls.confirmPostRitual])
 

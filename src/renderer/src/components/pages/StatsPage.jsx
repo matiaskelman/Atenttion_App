@@ -104,7 +104,8 @@ export default function StatsPage() {
     duration: Math.round(s.duration / 60),
     blinks: s.blinkCount,
     bpm: s.blinkRate,
-    away: Math.round((s.awaySeconds || 0) / 60)
+    away: Math.round((s.awaySeconds || 0) / 60),
+    outcomeRating: s.outcomeRating ?? null
   }))
 
   const avgBPM = sessions.length
@@ -208,6 +209,35 @@ export default function StatsPage() {
                 <Bar dataKey="duration" name="Minutes" fill="#7c3aed" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+            {recent.some((s) => s.outcomeRating != null) && (
+              <div className="mt-3 pt-3 border-t border-surface-3">
+                <p className="text-[10px] text-neutral-600 uppercase tracking-wider mb-2">Session outcome</p>
+                <div className="flex gap-1 items-center">
+                  {recent.map((s, i) => {
+                    const color = s.outcomeRating === 3 ? 'bg-violet-400' : s.outcomeRating === 2 ? 'bg-amber-400' : s.outcomeRating === 1 ? 'bg-red-400' : 'bg-surface-3'
+                    const label = s.outcomeRating === 3 ? 'Flow' : s.outcomeRating === 2 ? 'Focused' : s.outcomeRating === 1 ? 'Scattered' : '—'
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                        <div className={`w-2 h-2 rounded-full ${color}`} />
+                        <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
+                          <div className="bg-surface-2 border border-surface-3 rounded px-1.5 py-0.5 text-[9px] text-neutral-400 whitespace-nowrap">
+                            {s.name}: {label}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div className="flex gap-3 mt-2">
+                  {[{ color: 'bg-red-400', label: 'Scattered' }, { color: 'bg-amber-400', label: 'Focused' }, { color: 'bg-violet-400', label: 'Flow' }].map(({ color, label }) => (
+                    <div key={label} className="flex items-center gap-1">
+                      <div className={`w-1.5 h-1.5 rounded-full ${color}`} />
+                      <span className="text-[9px] text-neutral-600">{label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Blink rate chart */}

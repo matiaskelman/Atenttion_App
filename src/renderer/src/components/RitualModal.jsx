@@ -18,12 +18,18 @@ const MOODS = [
 
 const BREATHING_CSS = `
   @keyframes breathe {
-    0%, 100% { transform: scale(1); opacity: 0.35; }
-    50% { transform: scale(1.6); opacity: 1; }
+    0%   { transform: scale(1);   opacity: 0.35; }
+    35%  { transform: scale(1.6); opacity: 1;    }
+    55%  { transform: scale(1.6); opacity: 1;    }
+    90%  { transform: scale(1);   opacity: 0.35; }
+    100% { transform: scale(1);   opacity: 0.35; }
   }
   @keyframes breathe-ring {
-    0%, 100% { transform: scale(1); opacity: 0.15; }
-    50% { transform: scale(1.8); opacity: 0.4; }
+    0%   { transform: scale(1);   opacity: 0.15; }
+    35%  { transform: scale(1.8); opacity: 0.4;  }
+    55%  { transform: scale(1.8); opacity: 0.4;  }
+    90%  { transform: scale(1);   opacity: 0.15; }
+    100% { transform: scale(1);   opacity: 0.15; }
   }
   .ritual-breathe { animation: breathe 8s ease-in-out infinite; }
   .ritual-breathe-ring { animation: breathe-ring 8s ease-in-out infinite; }
@@ -33,22 +39,37 @@ const AUTO_START_SECONDS = 32
 
 export default function RitualModal({ onConfirmPre, onConfirmPost }) {
   const {
-    ritualPhase, ritualGoal, ritualMoodBefore,
-    setRitualGoal, setRitualMoodBefore, setShowRitualModal
+    ritualPhase, ritualGoal, ritualMoodBefore, phoneUseExpected,
+    setRitualGoal, setRitualMoodBefore, setShowRitualModal, setPhoneUseExpected
   } = useStore()
 
   const [outcomeRating, setOutcomeRating] = useState(0)
   const [breathing, setBreathing] = useState(false)
   const [countdown, setCountdown] = useState(AUTO_START_SECONDS)
+  const [postCountdown, setPostCountdown] = useState(60)
   const autoStartRef = useRef(null)
   const countdownRef = useRef(null)
+  const postCountdownRef = useRef(null)
 
   useEffect(() => {
     return () => {
       clearTimeout(autoStartRef.current)
       clearInterval(countdownRef.current)
+      clearInterval(postCountdownRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (ritualPhase !== 'post') return
+    setPostCountdown(60)
+    postCountdownRef.current = setInterval(() => {
+      setPostCountdown((prev) => {
+        if (prev <= 1) { clearInterval(postCountdownRef.current); return 0 }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(postCountdownRef.current)
+  }, [ritualPhase])
 
   const handleStartSession = () => {
     setBreathing(true)
@@ -157,6 +178,26 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
             </div>
           </div>
 
+          <div className="flex flex-col gap-2">
+            <label className="text-xs text-neutral-400">Will you use your phone during this session?</label>
+            <div className="flex gap-2">
+              {[{ value: true, label: 'Yes' }, { value: false, label: 'No' }].map(({ value, label }) => (
+                <button
+                  key={String(value)}
+                  onClick={() => setPhoneUseExpected(phoneUseExpected === value ? null : value)}
+                  className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors
+                    ${phoneUseExpected === value
+                      ? value === true
+                        ? 'border-amber-500 bg-amber-500/10 text-amber-300'
+                        : 'border-emerald-500 bg-emerald-500/10 text-emerald-300'
+                      : 'border-surface-3 text-neutral-500 hover:border-neutral-600'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="flex items-center justify-end pt-1 border-t border-surface-3">
             <button
               onClick={handleStartSession}
@@ -201,12 +242,17 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
           </div>
         </div>
 
-        <button
-          onClick={() => onConfirmPost(outcomeRating || null)}
-          className="btn btn-primary w-full"
-        >
-          Done
-        </button>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-neutral-600 tabular-nums">
+            Closing in {postCountdown}s
+          </span>
+          <button
+            onClick={() => onConfirmPost(outcomeRating || null)}
+            className="btn btn-primary"
+          >
+            Done
+          </button>
+        </div>
       </div>
     </div>
   )

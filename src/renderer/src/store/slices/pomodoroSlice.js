@@ -48,10 +48,18 @@ export const createPomodoroSlice = (set) => ({
   ritualPhase: 'pre', // 'pre' | 'post'
   ritualGoal: '',
   ritualMoodBefore: null,
-  ritualEfficiencyImportance: null,
-  setShowRitualModal: (v) => set({ showRitualModal: v }),
+  setShowRitualModal: (v) => set(v
+    ? { showRitualModal: true, phoneUseExpected: null, phoneDetected: false }
+    : { showRitualModal: false }),
   setRitualPhase: (v) => set({ ritualPhase: v }),
   setRitualGoal: (v) => set({ ritualGoal: v }),
   setRitualMoodBefore: (v) => set({ ritualMoodBefore: v }),
-  setRitualEfficiencyImportance: (v) => set({ ritualEfficiencyImportance: v })
+
+  // Phone detection
+  phoneUseExpected: null, // null = not set, true = will use phone, false = won't use phone
+  phoneDetected: false,   // true while a phone-gaze pause is active
+  phonePickupsTotal: 0,   // cumulative pickups since app start — sessions snapshot deltas, like totalLookingAwaySeconds
+  setPhoneUseExpected: (v) => set({ phoneUseExpected: v }),
+  setPhoneDetected: (v) => set({ phoneDetected: v }),
+  incrementPhonePickups: () => set((s) => ({ phonePickupsTotal: s.phonePickupsTotal + 1 }))
 })

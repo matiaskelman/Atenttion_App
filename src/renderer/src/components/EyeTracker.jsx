@@ -25,7 +25,8 @@ const statusConfig = {
 export default function EyeTracker({ controls }) {
   const {
     eyeTrackingActive, eyeStatus, blinkCount, blinkRate,
-    blinkVariability, liveFocusScore, modelLoaded, modelLoading, lookingAwaySeconds, camError, modelError
+    blinkVariability, liveFocusScore, modelLoaded, modelLoading, lookingAwaySeconds, camError, modelError,
+    phoneDetected
   } = useStore()
   const { startCam, stopCam } = controls
 
@@ -117,6 +118,17 @@ export default function EyeTracker({ controls }) {
           <div className="flex flex-col">
             <span className={`text-xs font-medium ${rhythm.color}`}>Rhythm: {rhythm.label}</span>
             <span className="text-[10px] text-neutral-600">{rhythm.tip}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Phone detection banner */}
+      {phoneDetected && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40">
+          <AlertTriangle size={13} className="text-amber-400 shrink-0" />
+          <div className="flex flex-col">
+            <span className="text-xs font-semibold text-amber-300">Phone detected — timer paused</span>
+            <span className="text-[10px] text-amber-500/80">Look back at the camera to resume in 5s</span>
           </div>
         </div>
       )}

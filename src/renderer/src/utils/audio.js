@@ -35,6 +35,27 @@ export function playFocusEndTick() {
   } catch (_) {}
 }
 
+// Two-tone descending alert played when phone-gaze detection pauses the timer
+export function playPhoneAlert() {
+  try {
+    const ctx = new AudioContext()
+    ;[660, 440].forEach((freq, i) => {
+      const osc  = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      const t = ctx.currentTime + i * 0.32
+      gain.gain.setValueAtTime(0.15, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28)
+      osc.start(t)
+      osc.stop(t + 0.28)
+      if (i === 1) osc.onended = () => ctx.close()
+    })
+  } catch (_) {}
+}
+
 // Soft low chime tick used during the last 10 s of a break (break ending → focus upcoming)
 export function playBreakEndTick() {
   try {

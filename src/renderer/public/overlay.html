@@ -15,9 +15,11 @@
     }
 
     /* ── Clock ring ── */
+    /* Bottom-anchored: window resizes are bottom-right anchored, so growing the
+       window upward leaves the ring exactly where it was on screen. */
     .ring {
       position: absolute;
-      left: 6px; top: 6px;
+      left: 6px; bottom: 6px;
       width: 88px; height: 88px;
       border-radius: 50%;
       background: rgba(12, 12, 16, 0.93);
@@ -29,13 +31,26 @@
       gap: 3px;
       -webkit-app-region: drag;
       cursor: default;
-      transition: border-color 0.4s ease, opacity 0.2s ease;
+      transition: border-color 0.4s ease, opacity 0.2s ease,
+                  width 0.45s ease, height 0.45s ease,
+                  left 0.45s ease, border-radius 0.45s ease;
     }
     .ring.focused     { border-color: rgba(34, 197, 94, 0.9); }
     .ring.away        { border-color: rgba(239, 68, 68, 0.9); }
     .ring.focus-mode  { border-color: rgba(124, 58, 237, 0.75); }
     .ring.break-mode  { border-color: rgba(16, 185, 129, 0.75); }
     .ring.hidden      { opacity: 0; pointer-events: none; }
+
+    /* Phone morph — circle stretches into a phone silhouette */
+    .ring.phone {
+      width: 62px; height: 110px;
+      left: 19px;
+      border-radius: 16px;
+      border-color: rgba(245, 158, 11, 0.85);
+      animation: phone-pulse 2s ease-in-out infinite;
+    }
+    .ring .time, .ring .label { transition: opacity 0.18s ease; }
+    .ring.phone .time, .ring.phone .label { opacity: 0; }
     .time {
       color: #f3f4f6;
       font-size: 19px;
@@ -143,14 +158,69 @@
       transition: color 0.12s ease;
     }
     .btn-skip:hover { color: #9ca3af; }
+
+    /* ── Phone content (inside the ring, revealed by the morph) ── */
+    @keyframes phone-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+      50%       { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+    }
+    .phone-content {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.18s ease;
+    }
+    .ring.phone .phone-content { opacity: 1; transition-delay: 0.25s; }
+    .phone-notch {
+      position: absolute;
+      top: 9px;
+      width: 22px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(245, 158, 11, 0.5);
+    }
+    .phone-home {
+      position: absolute;
+      bottom: 9px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(245, 158, 11, 0.5);
+    }
+    .phone-arrow {
+      font-size: 22px;
+      line-height: 1;
+      color: rgba(245, 158, 11, 0.9);
+    }
+    .phone-label {
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgba(245, 158, 11, 0.7);
+      line-height: 1.2;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Clock ring -->
+  <!-- Clock ring — morphs into a phone silhouette during phone-gaze pause -->
   <div class="ring" id="ring">
     <div class="time idle" id="time">--:--</div>
     <div class="label" id="label">Atenttion</div>
+    <div class="phone-content">
+      <div class="phone-notch"></div>
+      <div class="phone-arrow">↓</div>
+      <div class="phone-label">Timer<br>paused</div>
+      <div class="phone-home"></div>
+    </div>
   </div>
 
   <!-- Feedback card — hidden until post-ritual -->
@@ -175,6 +245,8 @@
     const feedbackGoal = document.getElementById('feedbackGoal')
     const btnSkip      = document.getElementById('btnSkip')
     const starBtns     = document.querySelectorAll('.star-btn')
+
+    let phoneMode = false   // mirrors overlay:phone-detected — onState must not wipe the morph class
 
     let countdownInterval = null
     const countdownEl = document.getElementById('countdown')
@@ -216,12 +288,14 @@
         if (pomodoroState === 'paused') timeEl.classList.add('paused')
       }
 
-      ringEl.className = 'ring'
+      ringEl.className = 'ring' + (phoneMode ? ' phone' : '')
       if (feedbackCard.classList.contains('visible')) ringEl.classList.add('hidden')
-      if (eyeStatus === 'looking' || eyeStatus === 'blinking') ringEl.classList.add('focused')
-      else if (eyeStatus === 'away') ringEl.classList.add('away')
-      else if (pomodoroState === 'work') ringEl.classList.add('focus-mode')
-      else if (pomodoroState === 'break') ringEl.classList.add('break-mode')
+      if (!phoneMode) {
+        if (eyeStatus === 'looking' || eyeStatus === 'blinking') ringEl.classList.add('focused')
+        else if (eyeStatus === 'away') ringEl.classList.add('away')
+        else if (pomodoroState === 'work') ringEl.classList.add('focus-mode')
+        else if (pomodoroState === 'break') ringEl.classList.add('break-mode')
+      }
 
       labelEl.className = 'label'
       if (pomodoroState === 'work') { labelEl.textContent = 'Focus'; labelEl.classList.add('work') }
@@ -261,6 +335,12 @@
     })
 
     btnSkip.addEventListener('click', () => { clearCountdown(); window.overlayApi.submitRating(null) })
+
+    // ── Phone detection — morph the ring into a phone silhouette and back ──
+    window.overlayApi.onPhoneDetected(function(active) {
+      phoneMode = active
+      ringEl.classList.toggle('phone', active)
+    })
   </script>
 </body>
 </html>

@@ -26,7 +26,7 @@ async function appendSession(session) {
   const filePath = getSessionsPath()
   await ensureDir(getUserDataPath())
 
-  const header = `# Atenttion — Session Log\n\n| Date | Time | Duration | Blinks | BPM | Away |\n|------|------|----------|--------|-----|------|\n`
+  const header = `# Atenttion — Session Log\n\n| Date | Time | Duration | Blinks | BPM | Away | Phone |\n|------|------|----------|--------|-----|------|-------|\n`
 
   const date = new Date(session.date)
   const dateStr = date.toLocaleDateString('en-CA')
@@ -35,8 +35,9 @@ async function appendSession(session) {
   const away = session.awaySeconds > 0 ? formatDuration(session.awaySeconds) : '—'
   const bpm = session.blinkRate || 0
   const blinks = session.blinkCount || 0
+  const phone = session.phonePickups > 0 ? `${session.phonePickups}×` : '—'
 
-  const row = `| ${dateStr} | ${timeStr} | ${duration} | ${blinks} | ${bpm} | ${away} |\n`
+  const row = `| ${dateStr} | ${timeStr} | ${duration} | ${blinks} | ${bpm} | ${away} | ${phone} |\n`
 
   let current = ''
   try { current = await readFile(filePath, 'utf-8') } catch {}

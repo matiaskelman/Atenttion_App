@@ -6,7 +6,7 @@ import { Clock, Flame, Eye } from 'lucide-react'
 import { formatDuration } from '../../utils/format'
 
 export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
-  const { todayFocusSeconds, sessions, blinkCount, dailyGoalSeconds } = useStore()
+  const { todayFocusSeconds, sessions, blinkCount, dailyGoalSeconds, ritualGoal, pomodoroState, pomodoroMode } = useStore()
   const todaySessions = sessions.filter(
     (s) => new Date(s.date).toLocaleDateString('en-CA') === new Date().toLocaleDateString('en-CA')
   ).length
@@ -63,6 +63,14 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
           <span className="text-xs text-neutral-500">Blinks</span>
         </div>
       </div>
+
+      {/* Active session goal */}
+      {ritualGoal && pomodoroMode === 'work' && pomodoroState === 'work' && (
+        <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-500/5 border border-violet-500/20">
+          <span className="text-[10px] text-violet-400/60 uppercase tracking-wider shrink-0">Goal</span>
+          <span className="text-xs text-neutral-400 italic truncate">{ritualGoal}</span>
+        </div>
+      )}
 
       {/* Main panels */}
       <div className="grid grid-cols-[1fr_260px] gap-4">
