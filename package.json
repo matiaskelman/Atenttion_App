@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",
+    "exceljs": "^4.4.0",
     "lucide-react": "^0.460.0",
     "recharts": "^2.13.3",
     "zustand": "^5.0.1"
@@ -57,7 +58,9 @@
     "mac": {
       "target": {
         "target": "dmg",
-        "arch": ["universal"]
+        "arch": [
+          "universal"
+        ]
       },
       "extendInfo": {
         "NSCameraUsageDescription": "Atenttion uses the camera for real-time eye tracking to detect focus and blink rate.",

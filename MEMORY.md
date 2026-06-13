@@ -15,6 +15,18 @@ Add entries at the top of each section. Keep entries concise.
 
 ## Decisions Made
 
+### 2026-06-12 — Ritual UX overhaul + XLSX export
+UX review of the pre/post session ritual found it collected data (goal, mood, outcome) but never displayed any of it. Changes:
+1. **Dead state removed** — `ritualEfficiencyImportance` + setter deleted from `pomodoroSlice.js` (never read anywhere).
+2. **Breathing animation rebuilt** (`RitualModal.jsx`) — old 2-phase pulse replaced with: SVG sweep arc (r=108, circumference 678.6) tracing the 8s cycle, 3 concentric ripple rings with staggered delays (0/0.08/0.18s), glowing core (box-shadow blooms on inhale), and dynamic phase text ("Breathe in / Hold / Breathe out") crossfaded by a 50ms JS interval. **Keyframe percentages (35/55/90) must match the `PHASES` array ends** — two sources of truth that sync the visual and the text.
+3. **Post-ritual auto-dismiss 10s → 60s** — the real timer lives in `App.jsx` (`confirmPostRitual(null)` timeout). RitualModal shows a visual "Closing in Xs" countdown, and overlay.html's skip countdown was updated 10→60 to match. **Three places must agree: App.jsx timeout, RitualModal postCountdown, overlay.html remaining.**
+4. **Goal shown during session** — FocusPage renders `ritualGoal` in a violet-tinted bar while `pomodoroMode === 'work' && pomodoroState === 'work'`.
+5. **Outcome dots in StatsPage** — colored dot row (red/amber/violet = Scattered/Focused/Flow) under the Focus Duration chart; only renders if some session has `outcomeRating`.
+6. **Sessions table upgraded** — Date+time stacked in first column, new Outcome column, "Show all N sessions" expand/collapse (default 8 rows).
+7. **Export is now XLSX, not CSV** — `data:exportCsv` IPC channel (name kept) now writes a styled .xlsx via **exceljs (new prod dependency)**: dark violet header, alternating row fills, focus-score and outcome cells colored by value, frozen header row. Button label says "Export XLSX".
+Gotcha discovered: Tailwind opacity suffixes `/6` and `/12` are not in the default scale and get silently dropped by JIT — use `/5` and `/10`.
+Note: moodBefore/outcomeRating were ALREADY saved in session objects by `usePomodoro.js` — the gap was display-only.
+
 ### 2026-05-22 — Eye tracking bug fixes
 Three bugs prevented blinks from being detected at all:
 1. **`faceapiRef` null on remount** — `loadModels()` returned early if `modelLoaded` was already true in the store, leaving `faceapiRef.current = null` for freshly mounted hook instances. RAF loop ran forever but `runFrame` exited at the `!faceapi` guard, never detecting anything.

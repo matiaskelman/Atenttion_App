@@ -20,6 +20,7 @@ export const createEyeTrackerSlice = (set) => ({
   liveJawOpen: null,
   liveGaze: null,      // iris vertical position vs eye-corner line, ÷ eyeSpan — higher = eyes cast lower
   phoneScorePct: 0,    // phone-detection accumulator as % of trigger threshold
+  lastRecalAt: null,   // timestamp of last successful background recalibration
   setEyeTrackingActive: (v) => set({ eyeTrackingActive: v }),
   setEyeStatus: (s) => set({ eyeStatus: s }),
   setBlinkCount: (c) => set({ blinkCount: c }),
@@ -40,5 +41,6 @@ export const createEyeTrackerSlice = (set) => ({
   setLivePitch: (v) => set({ livePitch: v }),
   setLiveJawOpen: (v) => set({ liveJawOpen: v }),
   setLiveGaze: (v) => set({ liveGaze: v }),
-  setPhoneScorePct: (v) => set({ phoneScorePct: v })
+  setPhoneScorePct: (v) => set({ phoneScorePct: v }),
+  setLastRecalAt: (v) => set({ lastRecalAt: v })
 })

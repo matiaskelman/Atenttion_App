@@ -2,50 +2,12 @@ import { useState } from 'react'
 import { useStore } from '../../store'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  LineChart, Line, CartesianGrid, Cell
+  ComposedChart, Line, Cell
 } from 'recharts'
-import { Clock, Flame, Eye, Zap, Download, BookOpen } from 'lucide-react'
+import { Clock, Flame, Eye, Zap, Download, Smartphone, Sun } from 'lucide-react'
 import { AppUsageList } from '../AppUsageList'
+import SessionsTable from '../SessionsTable'
 import { formatDuration, formatIsoTime } from '../../utils/format'
-
-function RitualImpactCard({ sessions }) {
-  const ritualSessions = sessions.filter((s) => s.ritual === true && s.focusScore != null)
-  const plainSessions = sessions.filter((s) => !s.ritual && s.focusScore != null)
-  if (ritualSessions.length < 5) return null
-
-  const avg = (arr) => Math.round(arr.reduce((a, s) => a + s.focusScore, 0) / arr.length)
-  const withRitual = avg(ritualSessions)
-  const withoutRitual = plainSessions.length ? avg(plainSessions) : null
-  const delta = withoutRitual != null ? withRitual - withoutRitual : null
-
-  return (
-    <div className="card mb-4">
-      <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
-        <BookOpen size={13} className="text-violet-400" /> Ritual Impact
-      </h3>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] text-neutral-600 uppercase tracking-wider">With ritual</span>
-          <span className="text-2xl font-semibold text-violet-400">{withRitual}</span>
-          <span className="text-[10px] text-neutral-600">avg focus score · {ritualSessions.length} sessions</span>
-        </div>
-        {withoutRitual != null ? (
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Without ritual</span>
-            <span className="text-2xl font-semibold text-neutral-300">{withoutRitual}</span>
-            <span className={`text-[10px] ${delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-red-400' : 'text-neutral-600'}`}>
-              {delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : '—'} pts difference
-            </span>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1 justify-center">
-            <span className="text-xs text-neutral-600 italic">Complete sessions without ritual to compare</span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -59,11 +21,192 @@ const CustomTooltip = ({ active, payload, label }) => {
   )
 }
 
+function ChartLegend({ items }) {
+  return (
+    <div className="flex gap-3 mt-2">
+      {items.map(({ color, label }) => (
+        <div key={label} className="flex items-center gap-1">
+          <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+          <span className="text-[9px] text-neutral-600">{label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function RecentSessionsChart({ recent }) {
+  return (
+    <div className="card">
+      <h3 className="text-sm font-semibold text-neutral-300 mb-4">Recent Sessions</h3>
+      <ResponsiveContainer width="100%" height={180}>
+        <ComposedChart data={recent} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
+          <XAxis dataKey="name" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
+          <YAxis yAxisId="left" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
+          <YAxis
+            yAxisId="right" orientation="right" domain={[0, 100]} width={30}
+            tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          <Bar yAxisId="left" dataKey="duration" name="Minutes" fill="#7c3aed" radius={[4, 4, 0, 0]} />
+          <Line
+            yAxisId="right" type="monotone" dataKey="focusScore" name="Focus score"
+            stroke="#10b981" strokeWidth={2}
+            dot={{ fill: '#10b981', r: 3 }} activeDot={{ r: 5 }} connectNulls
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <ChartLegend items={[{ color: '#7c3aed', label: 'Minutes' }, { color: '#10b981', label: 'Focus score' }]} />
+      {recent.some((s) => s.outcomeRating != null) && (
+        <div className="mt-3 pt-3 border-t border-surface-3">
+          <p className="text-[10px] text-neutral-600 uppercase tracking-wider mb-2">Session outcome</p>
+          <div className="flex gap-1 items-center">
+            {recent.map((s, i) => {
+              const color = s.outcomeRating === 3 ? 'bg-violet-400' : s.outcomeRating === 2 ? 'bg-amber-400' : s.outcomeRating === 1 ? 'bg-red-400' : 'bg-surface-3'
+              const label = s.outcomeRating === 3 ? 'Flow' : s.outcomeRating === 2 ? 'Focused' : s.outcomeRating === 1 ? 'Scattered' : '—'
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
+                  <div className={`w-2 h-2 rounded-full ${color}`} />
+                  <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
+                    <div className="bg-surface-2 border border-surface-3 rounded px-1.5 py-0.5 text-[9px] text-neutral-400 whitespace-nowrap">
+                      {s.name}: {label}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex gap-3 mt-2">
+            {[{ color: 'bg-red-400', label: 'Scattered' }, { color: 'bg-amber-400', label: 'Focused' }, { color: 'bg-violet-400', label: 'Flow' }].map(({ color, label }) => (
+              <div key={label} className="flex items-center gap-1">
+                <div className={`w-1.5 h-1.5 rounded-full ${color}`} />
+                <span className="text-[9px] text-neutral-600">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DistractionsCard({ sessions }) {
+  const recent = sessions.slice(-10)
+  const data = recent.map((s) => ({
+    name: formatIsoTime(s.date),
+    pickups: s.phonePickups ?? 0,
+    awayMin: Math.round((s.awaySeconds || 0) / 60)
+  }))
+  const totalPickups = data.reduce((a, d) => a + d.pickups, 0)
+  const totalAwaySeconds = recent.reduce((a, s) => a + (s.awaySeconds || 0), 0)
+  const avgPickups = recent.length ? (totalPickups / recent.length).toFixed(1) : '0'
+  const avgAwaySeconds = recent.length ? Math.round(totalAwaySeconds / recent.length) : 0
+  const allZero = data.every((d) => d.pickups === 0 && d.awayMin === 0)
+
+  return (
+    <div className="card">
+      <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
+        <Smartphone size={13} className="text-amber-400" /> Distractions
+      </h3>
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Phone pickups</span>
+          <span className="text-2xl font-semibold text-amber-400">{totalPickups}</span>
+          <span className="text-[10px] text-neutral-600">{avgPickups} avg/session</span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Away time</span>
+          <span className="text-2xl font-semibold text-red-400">{totalAwaySeconds ? formatDuration(totalAwaySeconds) : '0m'}</span>
+          <span className="text-[10px] text-neutral-600">{avgAwaySeconds ? formatDuration(avgAwaySeconds) : '0m'} avg/session</span>
+        </div>
+      </div>
+      {allZero ? (
+        <p className="text-xs text-emerald-400/70 py-2">No distractions recorded — great focus.</p>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={100}>
+            <BarChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: -25 }}>
+              <XAxis dataKey="name" tick={{ fill: '#525252', fontSize: 9 }} tickLine={false} axisLine={false} />
+              <YAxis tick={{ fill: '#525252', fontSize: 9 }} tickLine={false} axisLine={false} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Bar dataKey="pickups" name="Pickups" fill="#f59e0b" radius={[2, 2, 0, 0]} />
+              <Bar dataKey="awayMin" name="Away (min)" fill="#ef4444" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+          <ChartLegend items={[{ color: '#f59e0b', label: 'Pickups' }, { color: '#ef4444', label: 'Away (min)' }]} />
+        </>
+      )}
+    </div>
+  )
+}
+
+const HOUR_BUCKETS = [
+  { key: 'Morning', test: (h) => h >= 6 && h < 12 },
+  { key: 'Afternoon', test: (h) => h >= 12 && h < 17 },
+  { key: 'Evening', test: (h) => h >= 17 && h < 22 },
+  { key: 'Night', test: (h) => h >= 22 || h < 6 }
+]
+
+const HoursTooltip = ({ active, payload, label }) => {
+  if (!active || !payload?.length || payload[0].value == null) return null
+  const { count } = payload[0].payload
+  return (
+    <div className="bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-xs">
+      <p className="text-neutral-400 mb-1">{label}</p>
+      <p className="text-violet-400">Avg focus: {payload[0].value} · {count} session{count === 1 ? '' : 's'}</p>
+    </div>
+  )
+}
+
+function BestFocusHoursCard({ sessions }) {
+  const scored = sessions.filter((s) => s.focusScore != null)
+  const data = HOUR_BUCKETS.map(({ key, test }) => {
+    const bucket = scored.filter((s) => test(new Date(s.date).getHours()))
+    return {
+      name: key,
+      avg: bucket.length ? Math.round(bucket.reduce((a, s) => a + s.focusScore, 0) / bucket.length) : null,
+      count: bucket.length
+    }
+  })
+  const best = data.reduce((b, d) => (d.avg != null && (b == null || d.avg > b.avg) ? d : b), null)
+
+  return (
+    <div className="card">
+      <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
+        <Sun size={13} className="text-amber-400" /> Best Focus Hours
+      </h3>
+      {scored.length < 3 ? (
+        <p className="text-xs text-neutral-600 py-6 text-center">Not enough data yet — complete a few more sessions.</p>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: -25 }}>
+              <XAxis dataKey="name" tick={{ fill: '#525252', fontSize: 9 }} tickLine={false} axisLine={false} />
+              <YAxis domain={[0, 100]} tick={{ fill: '#525252', fontSize: 9 }} tickLine={false} axisLine={false} />
+              <Tooltip content={<HoursTooltip />} />
+              <Bar dataKey="avg" name="Avg focus" radius={[4, 4, 0, 0]}>
+                {data.map((entry, i) => (
+                  <Cell key={i} fill={best && entry.name === best.name ? '#7c3aed' : '#3f3f46'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          {best && (
+            <p className="text-[10px] text-neutral-600 mt-2">Best window: {best.name} (avg {best.avg})</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function StatsPage() {
-  const { sessions, todayFocusSeconds, blinkCount, appUsageFocus, appUsageBreak, streak } = useStore()
+  const sessions = useStore((s) => s.sessions)
+  const todayFocusSeconds = useStore((s) => s.todayFocusSeconds)
+  const appUsageFocus = useStore((s) => s.appUsageFocus)
+  const appUsageBreak = useStore((s) => s.appUsageBreak)
+  const streak = useStore((s) => s.streak)
   const [exporting, setExporting] = useState(false)
   const [exportMsg, setExportMsg] = useState(null)
-  const [selectedGoal, setSelectedGoal] = useState(null)
 
   const handleExportCsv = async () => {
     setExporting(true)
@@ -99,21 +242,15 @@ export default function StatsPage() {
     }
   })
 
-  const recent = sessions.slice(-10).map((s, i) => ({
+  const recent = sessions.slice(-10).map((s) => ({
     name: formatIsoTime(s.date),
     duration: Math.round(s.duration / 60),
-    blinks: s.blinkCount,
-    bpm: s.blinkRate,
-    away: Math.round((s.awaySeconds || 0) / 60),
+    focusScore: s.focusScore ?? null,
     outcomeRating: s.outcomeRating ?? null
   }))
 
   const avgBPM = sessions.length
     ? Math.round(sessions.reduce((a, s) => a + (s.blinkRate || 0), 0) / sessions.length)
-    : 0
-
-  const avgAway = sessions.length
-    ? Math.round(sessions.reduce((a, s) => a + (s.awaySeconds || 0), 0) / sessions.length)
     : 0
 
   return (
@@ -139,7 +276,43 @@ export default function StatsPage() {
         ))}
       </div>
 
-      {/* App Activity — always visible, does not require completed sessions */}
+      {sessions.length === 0 ? (
+        <div className="card flex flex-col items-center justify-center py-16 text-center mb-4">
+          <Flame size={32} className="text-neutral-700 mb-3" />
+          <p className="text-neutral-500 text-sm">No sessions yet.</p>
+          <p className="text-neutral-600 text-xs mt-1">Complete a Pomodoro to see your stats here.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4 mb-4">
+          <SessionsTable sessions={sessions} />
+          <RecentSessionsChart recent={recent} />
+          <div className="grid grid-cols-2 gap-4">
+            <DistractionsCard sessions={sessions} />
+            <BestFocusHoursCard sessions={sessions} />
+          </div>
+        </div>
+      )}
+
+      {/* Week view — always shown */}
+      <div className="card mb-4">
+        <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
+          <Clock size={13} className="text-violet-400" /> This Week
+        </h3>
+        <ResponsiveContainer width="100%" height={160}>
+          <BarChart data={weekData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
+            <XAxis dataKey="label" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
+            <YAxis tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
+            <Tooltip content={<CustomTooltip />} />
+            <Bar dataKey="minutes" name="Minutes" radius={[4, 4, 0, 0]}>
+              {weekData.map((entry, i) => (
+                <Cell key={i} fill={entry.isToday ? '#7c3aed' : '#3f3f46'} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* App Activity */}
       <div className="card mb-4">
         <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
           <Clock size={13} className="text-violet-400" /> App Activity
@@ -168,166 +341,6 @@ export default function StatsPage() {
         </div>
       </div>
 
-      {/* Week view — always shown */}
-      <div className="card mb-4">
-        <h3 className="text-sm font-semibold text-neutral-300 mb-4 flex items-center gap-2">
-          <Clock size={13} className="text-violet-400" /> This Week
-        </h3>
-        <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={weekData} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
-            <XAxis dataKey="label" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-            <YAxis tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-            <Tooltip content={<CustomTooltip />} />
-            <Bar dataKey="minutes" name="Minutes" radius={[4, 4, 0, 0]}>
-              {weekData.map((entry, i) => (
-                <Cell key={i} fill={entry.isToday ? '#7c3aed' : '#3f3f46'} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      <RitualImpactCard sessions={sessions} />
-
-      {/* Session charts — only once at least one session is complete */}
-      {sessions.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-16 text-center">
-          <Flame size={32} className="text-neutral-700 mb-3" />
-          <p className="text-neutral-500 text-sm">No sessions yet.</p>
-          <p className="text-neutral-600 text-xs mt-1">Complete a Pomodoro to see your stats here.</p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {/* Focus duration chart */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-neutral-300 mb-4">Focus Duration (minutes)</h3>
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={recent} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
-                <XAxis dataKey="name" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="duration" name="Minutes" fill="#7c3aed" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-            {recent.some((s) => s.outcomeRating != null) && (
-              <div className="mt-3 pt-3 border-t border-surface-3">
-                <p className="text-[10px] text-neutral-600 uppercase tracking-wider mb-2">Session outcome</p>
-                <div className="flex gap-1 items-center">
-                  {recent.map((s, i) => {
-                    const color = s.outcomeRating === 3 ? 'bg-violet-400' : s.outcomeRating === 2 ? 'bg-amber-400' : s.outcomeRating === 1 ? 'bg-red-400' : 'bg-surface-3'
-                    const label = s.outcomeRating === 3 ? 'Flow' : s.outcomeRating === 2 ? 'Focused' : s.outcomeRating === 1 ? 'Scattered' : '—'
-                    return (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-1 group relative">
-                        <div className={`w-2 h-2 rounded-full ${color}`} />
-                        <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 pointer-events-none">
-                          <div className="bg-surface-2 border border-surface-3 rounded px-1.5 py-0.5 text-[9px] text-neutral-400 whitespace-nowrap">
-                            {s.name}: {label}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                <div className="flex gap-3 mt-2">
-                  {[{ color: 'bg-red-400', label: 'Scattered' }, { color: 'bg-amber-400', label: 'Focused' }, { color: 'bg-violet-400', label: 'Flow' }].map(({ color, label }) => (
-                    <div key={label} className="flex items-center gap-1">
-                      <div className={`w-1.5 h-1.5 rounded-full ${color}`} />
-                      <span className="text-[9px] text-neutral-600">{label}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Blink rate chart */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-neutral-300 mb-4">Blink Rate per Session (BPM)</h3>
-            <ResponsiveContainer width="100%" height={160}>
-              <LineChart data={recent} margin={{ top: 0, right: 0, bottom: 0, left: -20 }}>
-                <CartesianGrid stroke="rgba(255,255,255,0.04)" strokeDasharray="0" />
-                <XAxis dataKey="name" tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: '#525252', fontSize: 10 }} tickLine={false} axisLine={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Line
-                  type="monotone" dataKey="bpm" name="BPM"
-                  stroke="#10b981" strokeWidth={2}
-                  dot={{ fill: '#10b981', r: 3 }}
-                  activeDot={{ r: 5 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Session table */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-neutral-300 mb-3">Recent Sessions</h3>
-            <div className="flex flex-col gap-1">
-              <div className="grid text-[10px] text-neutral-600 uppercase tracking-wider px-2 mb-1"
-                style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr 1fr 2fr' }}>
-                <span>Time</span><span>Duration</span><span>BPM</span><span>Rhythm</span><span>Focus</span><span>Away</span>
-                <span className="text-center">State</span>
-                <span className="text-center pl-4">Goal</span>
-              </div>
-              {[...sessions].reverse().slice(0, 8).map((s, i) => {
-                const cv = s.blinkVariability
-                const rhythm = cv === null || cv === undefined ? '—'
-                  : cv < 0.40 ? '🟢 Regular'
-                  : cv < 0.70 ? '🟡 Variable'
-                  : '🔴 Irregular'
-                const score = s.focusScore
-                const moodLabel = { 1: '😴 Tired', 2: '😑 Bored', 3: '😐 Neutral', 4: '💪 Motivated', 5: '⚡ Energized' }
-                return (
-                  <div key={i} className="grid text-xs px-2 py-2 rounded-lg hover:bg-surface-2 transition-colors text-neutral-400"
-                    style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr 1fr 1fr 2fr' }}>
-                    <span>{formatIsoTime(s.date)}</span>
-                    <span>{formatDuration(s.duration)}</span>
-                    <span>{s.blinkRate || 0}</span>
-                    <span className="text-[10px]">{rhythm}</span>
-                    <span className={score >= 80 ? 'text-emerald-400' : score >= 50 ? 'text-amber-400' : score > 0 ? 'text-red-400' : ''}>
-                      {score != null ? `${score}` : '—'}
-                    </span>
-                    <span>{s.awaySeconds ? formatDuration(s.awaySeconds) : '—'}</span>
-                    <span className="text-[10px] text-center">{s.moodBefore ? moodLabel[s.moodBefore] : '—'}</span>
-                    {s.goal ? (
-                      <button
-                        onClick={() => setSelectedGoal(s.goal)}
-                        className="pl-4 min-w-0 truncate text-left text-neutral-500 italic hover:text-neutral-200 transition-colors"
-                      >
-                        {s.goal}
-                      </button>
-                    ) : (
-                      <span className="pl-4 text-center">—</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {selectedGoal && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-              onClick={() => setSelectedGoal(null)}
-            >
-              <div
-                className="bg-surface-1 border border-surface-3 rounded-xl px-6 py-5 max-w-xs mx-4 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <p className="text-[10px] text-neutral-600 uppercase tracking-wider mb-2">Session Goal</p>
-                <p className="text-sm text-neutral-200 italic">"{selectedGoal}"</p>
-                <button
-                  onClick={() => setSelectedGoal(null)}
-                  className="mt-4 text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* CSV export */}
       <div className="flex items-center justify-end gap-3 mt-4">
         {exportMsg && (
@@ -341,7 +354,7 @@ export default function StatsPage() {
           className="btn btn-secondary flex items-center gap-2 text-xs"
         >
           <Download size={13} />
-          {exporting ? 'Exporting…' : 'Export CSV'}
+          {exporting ? 'Exporting…' : 'Export XLSX'}
         </button>
       </div>
     </div>

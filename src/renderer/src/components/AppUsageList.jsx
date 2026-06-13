@@ -90,10 +90,11 @@ export function formatAppTime(seconds) {
 const iconCache = new Map()   // name → dataURL
 const iconFetching = new Set() // names currently in-flight
 
-function AppAvatar({ name }) {
+export function AppAvatar({ name, size }) {
   const [iconUrl, setIconUrl] = useState(() => iconCache.get(name) ?? null)
   const color = appColor(name)
   const initials = appDisplayName(name).slice(0, 2).toUpperCase()
+  const small = size === 'sm'
 
   useEffect(() => {
     if (iconUrl || iconFetching.has(name) || !window.api?.system?.getAppIcon) return
@@ -109,13 +110,13 @@ function AppAvatar({ name }) {
 
   return (
     <div
-      className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 overflow-hidden"
+      className={`${small ? 'w-5 h-5 rounded' : 'w-7 h-7 rounded-md'} flex items-center justify-center flex-shrink-0 overflow-hidden`}
       style={{ backgroundColor: color + '28', border: `1px solid ${color}44` }}
     >
       {iconUrl ? (
-        <img src={iconUrl} className="w-5 h-5 object-contain" alt="" />
+        <img src={iconUrl} className={`${small ? 'w-3.5 h-3.5' : 'w-5 h-5'} object-contain`} alt="" />
       ) : (
-        <span className="text-[10px] font-bold" style={{ color }}>{initials}</span>
+        <span className={`${small ? 'text-[8px]' : 'text-[10px]'} font-bold`} style={{ color }}>{initials}</span>
       )}
     </div>
   )

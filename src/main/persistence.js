@@ -1,6 +1,7 @@
 import { ipcMain, app, dialog } from 'electron'
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
 import { join } from 'path'
+import ExcelJS from 'exceljs'
 
 function getUserDataPath() {
   return app.getPath('userData')
@@ -247,35 +248,105 @@ export function setupPersistenceIPC() {
     try {
       const { filePath, canceled } = await dialog.showSaveDialog({
         title: 'Export Sessions',
-        defaultPath: join(app.getPath('documents'), 'atenttion-sessions.csv'),
-        filters: [{ name: 'CSV', extensions: ['csv'] }]
+        defaultPath: join(app.getPath('documents'), 'atenttion-sessions.xlsx'),
+        filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }]
       })
       if (canceled || !filePath) return { success: false, canceled: true }
 
-      const SEP = ';'
-      const csvEscape = (v) => {
-        if (v == null || v === '') return ''
-        const s = String(v)
-        return s.includes(SEP) || s.includes('"') || s.includes('\n')
-          ? `"${s.replace(/"/g, '""')}"` : s
-      }
-      const header = ['date', 'duration_minutes', 'focus_score', 'blink_count', 'blink_rate',
-        'blink_variability', 'away_seconds', 'ritual', 'goal', 'mood_before', 'outcome_rating'].join(SEP)
-      const rows = sessions.map((s) => [
-        s.date ? new Date(s.date).toISOString() : '',
-        s.duration != null ? (s.duration / 60).toFixed(2) : '',
-        s.focusScore != null ? s.focusScore : '',
-        s.blinkCount != null ? s.blinkCount : '',
-        s.blinkRate != null ? s.blinkRate : '',
-        s.blinkVariability != null ? s.blinkVariability : '',
-        s.awaySeconds != null ? s.awaySeconds : '',
-        s.ritual ? 'true' : 'false',
-        csvEscape(s.goal),
-        s.moodBefore != null ? s.moodBefore : '',
-        s.outcomeRating != null ? s.outcomeRating : ''
-      ].join(SEP))
+      const MOOD   = { 1: 'Tired', 2: 'Bored', 3: 'Neutral', 4: 'Motivated', 5: 'Energized' }
+      const OUTCOME = { 1: 'Scattered', 2: 'Focused', 3: 'Flow' }
+      const RHYTHM = (cv) => cv == null ? '—' : cv < 0.40 ? 'Regular' : cv < 0.70 ? 'Variable' : 'Irregular'
 
-      await writeFile(filePath, [header, ...rows].join('\n'), 'utf8')
+      const workbook = new ExcelJS.Workbook()
+      workbook.creator = 'Atenttion'
+      workbook.created = new Date()
+
+      const sheet = workbook.addWorksheet('Sessions', {
+        views: [{ state: 'frozen', ySplit: 1 }]
+      })
+
+      sheet.columns = [
+        { key: 'date',        width: 22 },
+        { key: 'duration',    width: 12 },
+        { key: 'focusScore',  width: 13 },
+        { key: 'bpm',         width: 8  },
+        { key: 'rhythm',      width: 14 },
+        { key: 'blinks',      width: 10 },
+        { key: 'away',        width: 10 },
+        { key: 'phone',       width: 14 },
+        { key: 'mood',        width: 14 },
+        { key: 'outcome',     width: 12 },
+        { key: 'goal',        width: 40 },
+      ]
+
+      // Header row
+      const headers = ['Date', 'Duration', 'Focus Score', 'BPM', 'Rhythm',
+        'Blinks', 'Away', 'Phone Pickups', 'Mood Before', 'Outcome', 'Goal']
+      const headerRow = sheet.addRow(headers)
+      headerRow.height = 26
+      headerRow.eachCell((cell) => {
+        cell.fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1333' } }
+        cell.font   = { bold: true, color: { argb: 'FFA78BFA' }, size: 11 }
+        cell.border = { bottom: { style: 'thin', color: { argb: 'FF4C1D95' } } }
+        cell.alignment = { vertical: 'middle', horizontal: 'center' }
+      })
+
+      // Data rows
+      sessions.forEach((s, i) => {
+        const durationMin = s.duration != null ? Math.round(s.duration / 60) : null
+        const awayMin     = s.awaySeconds > 0 ? `${Math.round(s.awaySeconds)}s` : '—'
+        const row = sheet.addRow({
+          date:       s.date ? new Date(s.date).toLocaleString() : '—',
+          duration:   durationMin != null ? `${durationMin}m` : '—',
+          focusScore: s.focusScore ?? '—',
+          bpm:        s.blinkRate  ?? '—',
+          rhythm:     RHYTHM(s.blinkVariability),
+          blinks:     s.blinkCount ?? '—',
+          away:       awayMin,
+          phone:      s.phonePickups ?? 0,
+          mood:       MOOD[s.moodBefore]    ?? '—',
+          outcome:    OUTCOME[s.outcomeRating] ?? '—',
+          goal:       s.goal || '—',
+        })
+        row.height = 20
+
+        const rowBg = i % 2 === 0 ? 'FF12111A' : 'FF0E0D16'
+        row.eachCell((cell) => {
+          cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBg } }
+          cell.font      = { color: { argb: 'FFD4D4D8' }, size: 10 }
+          cell.alignment = { vertical: 'middle' }
+        })
+
+        // Focus score — color by performance
+        if (s.focusScore != null) {
+          const scoreColor = s.focusScore >= 80 ? 'FF34D399' : s.focusScore >= 50 ? 'FFFBBF24' : 'FFF87171'
+          const cell = row.getCell('focusScore')
+          cell.font = { color: { argb: scoreColor }, bold: true, size: 10 }
+          cell.alignment = { vertical: 'middle', horizontal: 'center' }
+        }
+
+        // Outcome — color by state
+        if (s.outcomeRating != null) {
+          const outcomeColor = s.outcomeRating === 3 ? 'FFA78BFA' : s.outcomeRating === 2 ? 'FFFBBF24' : 'FFF87171'
+          const cell = row.getCell('outcome')
+          cell.font = { color: { argb: outcomeColor }, bold: true, size: 10 }
+          cell.alignment = { vertical: 'middle', horizontal: 'center' }
+        }
+
+        // Mood — subtle violet tint
+        if (s.moodBefore != null) {
+          const cell = row.getCell('mood')
+          cell.font = { color: { argb: 'FFC4B5FD' }, size: 10 }
+        }
+
+        // Goal — italic
+        if (s.goal) {
+          const cell = row.getCell('goal')
+          cell.font = { color: { argb: 'FF8B8B9E' }, italic: true, size: 10 }
+        }
+      })
+
+      await workbook.xlsx.writeFile(filePath)
       return { success: true, filePath }
     } catch (e) {
       return { success: false, error: e.message }

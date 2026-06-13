@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
+import { useStore } from '../store'
 
 const OUTCOME_STATES = [
   { value: 1, label: 'Scattered', dotClass: 'text-red-400',    activeClass: 'border-red-500 bg-red-500/10 text-red-300' },
   { value: 2, label: 'Focused',   dotClass: 'text-amber-400',  activeClass: 'border-amber-500 bg-amber-500/10 text-amber-300' },
   { value: 3, label: 'Flow',      dotClass: 'text-violet-400', activeClass: 'border-violet-500 bg-violet-500/10 text-violet-300' },
 ]
-import { useStore } from '../store'
 
 const MOODS = [
   { value: 1, label: 'Tired',     emoji: '😴' },
@@ -16,23 +16,48 @@ const MOODS = [
   { value: 5, label: 'Energized', emoji: '⚡' }
 ]
 
+// Breath cycle: 8 s total — inhale 35%, hold 20%, exhale 35%, rest 10%
+const CYCLE_MS = 8000
+const PHASES = [
+  { label: 'Breathe in',  sub: 'slow and steady',    end: 0.35 },
+  { label: 'Hold',        sub: 'feel the stillness',  end: 0.55 },
+  { label: 'Breathe out', sub: 'release completely',  end: 0.90 },
+  { label: '',            sub: '',                     end: 1.00 },
+]
+
+// Arc circumference for r = 108: 2π × 108 ≈ 678.6
+const ARC_C = 678.6
+
 const BREATHING_CSS = `
-  @keyframes breathe {
-    0%   { transform: scale(1);   opacity: 0.35; }
-    35%  { transform: scale(1.6); opacity: 1;    }
-    55%  { transform: scale(1.6); opacity: 1;    }
-    90%  { transform: scale(1);   opacity: 0.35; }
-    100% { transform: scale(1);   opacity: 0.35; }
+  @keyframes breathe-core {
+    0%   { transform: scale(1);    box-shadow: 0 0  0px  0px rgba(139,92,246,0.45); }
+    35%  { transform: scale(1.52); box-shadow: 0 0 56px 18px rgba(139,92,246,0.18); }
+    55%  { transform: scale(1.52); box-shadow: 0 0 56px 18px rgba(139,92,246,0.18); }
+    90%  { transform: scale(1);    box-shadow: 0 0  0px  0px rgba(139,92,246,0.45); }
+    100% { transform: scale(1);    box-shadow: 0 0  0px  0px rgba(139,92,246,0.45); }
   }
-  @keyframes breathe-ring {
-    0%   { transform: scale(1);   opacity: 0.15; }
-    35%  { transform: scale(1.8); opacity: 0.4;  }
-    55%  { transform: scale(1.8); opacity: 0.4;  }
-    90%  { transform: scale(1);   opacity: 0.15; }
-    100% { transform: scale(1);   opacity: 0.15; }
+  @keyframes breathe-ring-1 {
+    0%   { transform: scale(1);    opacity: 0.45; }
+    35%  { transform: scale(1.45); opacity: 0.16; }
+    55%  { transform: scale(1.45); opacity: 0.16; }
+    90%  { transform: scale(1);    opacity: 0.45; }
+    100% { transform: scale(1);    opacity: 0.45; }
   }
-  .ritual-breathe { animation: breathe 8s ease-in-out infinite; }
-  .ritual-breathe-ring { animation: breathe-ring 8s ease-in-out infinite; }
+  @keyframes breathe-ring-2 {
+    0%   { transform: scale(1);    opacity: 0.22; }
+    35%  { transform: scale(1.32); opacity: 0.07; }
+    55%  { transform: scale(1.32); opacity: 0.07; }
+    90%  { transform: scale(1);    opacity: 0.22; }
+    100% { transform: scale(1);    opacity: 0.22; }
+  }
+  @keyframes arc-sweep {
+    from { stroke-dashoffset: ${ARC_C}; }
+    to   { stroke-dashoffset: 0; }
+  }
+  .ritual-core   { animation: breathe-core   8s ease-in-out infinite; }
+  .ritual-ring-1 { animation: breathe-ring-1 8s ease-in-out infinite 0.08s; }
+  .ritual-ring-2 { animation: breathe-ring-2 8s ease-in-out infinite 0.18s; }
+  .ritual-arc    { animation: arc-sweep      8s linear     infinite; }
 `
 
 const AUTO_START_SECONDS = 32
@@ -47,9 +72,13 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
   const [breathing, setBreathing] = useState(false)
   const [countdown, setCountdown] = useState(AUTO_START_SECONDS)
   const [postCountdown, setPostCountdown] = useState(60)
+  const [phaseIdx, setPhaseIdx] = useState(0)
+  const [textVisible, setTextVisible] = useState(true)
   const autoStartRef = useRef(null)
   const countdownRef = useRef(null)
   const postCountdownRef = useRef(null)
+  const phaseRef = useRef(0)
+  const breathStartRef = useRef(null)
 
   useEffect(() => {
     return () => {
@@ -58,6 +87,25 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
       clearInterval(postCountdownRef.current)
     }
   }, [])
+
+  // Drive phase label in sync with the 8-second CSS animation cycle
+  useEffect(() => {
+    if (!breathing) return
+    breathStartRef.current = Date.now()
+    phaseRef.current = 0
+    setPhaseIdx(0)
+    setTextVisible(true)
+    const id = setInterval(() => {
+      const progress = ((Date.now() - breathStartRef.current) % CYCLE_MS) / CYCLE_MS
+      const next = PHASES.findIndex((p) => progress < p.end)
+      if (next !== phaseRef.current) {
+        phaseRef.current = next
+        setTextVisible(false)
+        setTimeout(() => { setPhaseIdx(next); setTextVisible(true) }, 160)
+      }
+    }, 50)
+    return () => clearInterval(id)
+  }, [breathing])
 
   useEffect(() => {
     if (ritualPhase !== 'post') return
@@ -108,19 +156,49 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
   if (ritualPhase === 'pre') {
     if (breathing) {
       return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md">
           <style>{BREATHING_CSS}</style>
           <div className="bg-surface-1 border border-surface-3 rounded-2xl w-full max-w-sm mx-4 shadow-2xl overflow-hidden">
-            <div className="flex flex-col items-center justify-center gap-8 px-6 py-12">
-              <div className="relative flex items-center justify-center" style={{ width: 220, height: 220 }}>
-                <div className="absolute w-40 h-40 rounded-full bg-violet-500/20 ritual-breathe-ring" />
-                <div className="w-28 h-28 rounded-full bg-violet-500/50 ritual-breathe" />
+            <div className="flex flex-col items-center justify-center gap-6 px-6 py-10">
+
+              {/* Animation container */}
+              <div className="relative flex items-center justify-center" style={{ width: 240, height: 240 }}>
+
+                {/* SVG: track ring + sweep arc */}
+                <svg width="240" height="240" className="absolute inset-0" style={{ pointerEvents: 'none' }}>
+                  {/* Faint guide circle */}
+                  <circle cx="120" cy="120" r="108"
+                    fill="none" stroke="rgba(139,92,246,0.12)" strokeWidth="1.5"
+                  />
+                  {/* Sweep arc — starts at top, rotated -90° at the SVG level */}
+                  <circle cx="120" cy="120" r="108"
+                    fill="none" stroke="rgba(139,92,246,0.65)" strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeDasharray={ARC_C} strokeDashoffset={ARC_C}
+                    className="ritual-arc"
+                    transform="rotate(-90 120 120)"
+                  />
+                </svg>
+
+                {/* Outer ripple */}
+                <div className="absolute w-52 h-52 rounded-full bg-violet-500/5 ritual-ring-2" />
+                {/* Middle ripple */}
+                <div className="absolute w-40 h-40 rounded-full bg-violet-500/10 ritual-ring-1" />
+                {/* Core */}
+                <div className="w-24 h-24 rounded-full bg-violet-500/60 ritual-core" />
               </div>
-              <div className="flex flex-col items-center gap-1">
-                <p className="text-sm text-neutral-300 font-medium">Breathe in… hold… breathe out…</p>
-                <p className="text-xs text-neutral-600">Take a moment to settle in</p>
+
+              {/* Phase text */}
+              <div className="flex flex-col items-center gap-1.5" style={{ minHeight: 44 }}>
+                <p className={`text-base font-medium text-neutral-100 transition-opacity duration-150 ${textVisible ? 'opacity-100' : 'opacity-0'}`}>
+                  {PHASES[phaseIdx].label}
+                </p>
+                <p className={`text-xs text-neutral-500 transition-opacity duration-150 ${textVisible ? 'opacity-100' : 'opacity-0'}`}>
+                  {PHASES[phaseIdx].sub}
+                </p>
               </div>
             </div>
+
             <div className="flex items-center justify-between px-6 py-4 border-t border-surface-3">
               <span className="text-xs text-neutral-600">
                 Starting in <span className="text-neutral-400 tabular-nums">{countdown}s</span>

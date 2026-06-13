@@ -139,6 +139,7 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
   const liveJawOpen            = useStore((s) => s.liveJawOpen)
   const liveGaze               = useStore((s) => s.liveGaze)
   const phoneScorePct          = useStore((s) => s.phoneScorePct)
+  const lastRecalAt            = useStore((s) => s.lastRecalAt)
   const blinkRate              = useStore((s) => s.blinkRate)
   const blinkVariability       = useStore((s) => s.blinkVariability)
   const blinkCount             = useStore((s) => s.blinkCount)
@@ -328,6 +329,12 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
           <div className="flex justify-between text-neutral-400">
             <span>Static fallback</span>
             <span className="text-neutral-400 font-mono">0.200</span>
+          </div>
+          <div className="flex justify-between text-neutral-400">
+            <span>Background recal</span>
+            <span className="text-neutral-200 font-mono">
+              {lastRecalAt ? new Date(lastRecalAt).toLocaleTimeString() : '—'}
+            </span>
           </div>
         </div>
       </div>

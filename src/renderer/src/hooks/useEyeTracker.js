@@ -18,14 +18,18 @@ const EAR_VALID_MIN         = 0.05   // below this = bad frame (hand/occlusion)
 const EAR_VALID_MAX         = 0.60   // above this = bad frame
 const TALK_THRESHOLD        = 0.22   // jaw-open ratio (lip gap / eye span) — suppress while talking
 const POSE_GUARD_FRAMES     = 3      // consecutive bad-pose frames before suppression kicks in
-const ALPHA_SLOW            = 0.008  // EMA rate during normal tracking (~86-frame half-life, 2.8s)
-const ALPHA_FAST            = 0.030  // EMA rate when eye is clearly stable (~23-frame half-life, 0.8s)
+const ALPHA_SLOW            = 0.016  // EMA rate during normal tracking (~43-frame half-life, 1.4s)
+const ALPHA_FAST            = 0.060  // EMA rate when eye is clearly stable (~11-frame half-life, 0.4s)
 const PHONE_PITCH_DROP      = 0.15   // head-down = pitch below personal baseline by this much
 const PHONE_GAZE_DROP       = 0.045  // eyes-down = iris below personal baseline by this much (÷ eyeSpan)
 const PHONE_TRIGGER_MS      = 3000   // accumulated down-time that fires detection
 const PHONE_DECAY_FACTOR    = 2      // up-frames drain the accumulator 2× faster than down-frames fill it
 const PHONE_EAR_RATIO       = 0.88   // EAR booster: depressed EAR lowers the down-bar on borderline frames
 const PHONE_RESUME_CANCEL_MS = 500   // sustained down-time needed to cancel the resume countdown (flicker-proof)
+const PHONE_COOLDOWN_MS     = 8000   // after a phone resume, block re-triggering while baselines settle
+const RECAL_INTERVAL_MS     = 60000  // background recalibration cadence
+const RECAL_WINDOW_MS       = 10000  // background sampling window length
+const RECAL_MIN_SAMPLES     = 30     // minimum valid samples to accept a background recalibration
 const BASELINE_ALPHA        = 0.005  // slow drift-tracking EMA for pitch/gaze baselines on up-frames
 
 // MediaPipe 478-point mesh — 6 EAR landmarks per eye
@@ -79,6 +83,14 @@ export function useEyeTracker(videoRef) {
   const gazeSamplesRef         = useRef([])
   const phoneAutoPausedRef     = useRef(false)
   const phoneResumeStartRef    = useRef(null)
+  const phoneCooldownUntilRef  = useRef(0)      // post-resume window where re-triggering is blocked
+  const resumePitchBufRef      = useRef([])     // confirmed screen-gaze samples during the 5s countdown
+  const resumeGazeBufRef       = useRef([])
+  const recalNextAtRef         = useRef(0)      // when the next background recal window opens (0 = not armed)
+  const recalWindowEndRef      = useRef(null)   // non-null while a 10s sampling window is open
+  const recalEarSamplesRef     = useRef([])
+  const recalPitchSamplesRef   = useRef([])
+  const recalGazeSamplesRef    = useRef([])
 
   const loadModels = useCallback(async () => {
     const s = useStore.getState()
@@ -125,6 +137,8 @@ export function useEyeTracker(videoRef) {
         phoneResumeStartRef.current  = null
         lastFrameTimeRef.current     = null
         phoneDownStreakMsRef.current = 0
+        resumePitchBufRef.current    = []
+        resumeGazeBufRef.current     = []
         if (!awayStartRef.current) awayStartRef.current = Date.now()
         const awayMs = Date.now() - awayStartRef.current
         s.setLookingAwaySeconds(Math.round(awayMs / 1000))
@@ -253,6 +267,54 @@ export function useEyeTracker(videoRef) {
           gazeSamplesRef.current  = []
         }
 
+        // Background recalibration — every 60s, a 10s sampling window runs alongside the
+        // live tracker (which keeps using the old calibration). The new calibration is
+        // swapped in only if the window collected enough quality-gated samples; a window
+        // that caught the user away/blinking/on the phone is discarded silently.
+        if (calElapsed >= CALIBRATION_WINDOW_MS) {
+          const recalNow = Date.now()
+          if (recalNextAtRef.current === 0) recalNextAtRef.current = recalNow + RECAL_INTERVAL_MS
+          if (recalWindowEndRef.current === null) {
+            if (recalNow >= recalNextAtRef.current && !phoneAutoPausedRef.current) {
+              recalWindowEndRef.current    = recalNow + RECAL_WINDOW_MS
+              recalEarSamplesRef.current   = []
+              recalPitchSamplesRef.current = []
+              recalGazeSamplesRef.current  = []
+            }
+          } else if (recalNow < recalWindowEndRef.current) {
+            // EAR gate matches the initial calibration; pitch/gaze additionally exclude
+            // borderline-down frames so phone glances can't poison the new baselines
+            if (ear > CALIBRATION_OPEN_MIN) recalEarSamplesRef.current.push(ear)
+            const looksDown = baselinePitchRef.current !== null
+              && (baselinePitchRef.current - pitchRatio > PHONE_PITCH_DROP * 0.6
+                  || gazeRatio - baselineGazeRef.current > PHONE_GAZE_DROP * 0.6)
+            if (yawRatio < YAW_THRESHOLD && !looksDown) {
+              recalPitchSamplesRef.current.push(pitchRatio)
+              recalGazeSamplesRef.current.push(gazeRatio)
+            }
+          } else {
+            let recalSucceeded = false
+            if (recalEarSamplesRef.current.length >= RECAL_MIN_SAMPLES) {
+              const sorted = [...recalEarSamplesRef.current].sort((a, b) => a - b)
+              const p75    = sorted[Math.floor(sorted.length * 0.75)]
+              adaptiveThresholdRef.current = p75 * 0.75
+              openEyeEmaRef.current        = p75
+              s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
+              recalSucceeded = true
+            }
+            if (recalPitchSamplesRef.current.length >= RECAL_MIN_SAMPLES) {
+              const sp = [...recalPitchSamplesRef.current].sort((a, b) => a - b)
+              const sg = [...recalGazeSamplesRef.current].sort((a, b) => a - b)
+              baselinePitchRef.current = sp[Math.floor(sp.length / 2)]
+              baselineGazeRef.current  = sg[Math.floor(sg.length / 2)]
+              recalSucceeded = true
+            }
+            if (recalSucceeded) s.setLastRecalAt(recalNow)
+            recalWindowEndRef.current = null
+            recalNextAtRef.current    = recalNow + RECAL_INTERVAL_MS
+          }
+        }
+
         // Debug store updates — always update so the debug page shows live values
         s.setLiveEar(Math.round(ear * 1000) / 1000)
         s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
@@ -276,27 +338,34 @@ export function useEyeTracker(videoRef) {
           // a depressed EAR lowers the bar on borderline frames. Pre-calibration falls back to the
           // absolute pitch threshold (conservative: may under-detect, never over-detects).
           const earLow = openEyeEmaRef.current !== null && ear < openEyeEmaRef.current * PHONE_EAR_RATIO
-          let downFrame
+          let downFrame, strongDown
           if (baselinePitchRef.current === null) {
-            downFrame = pitchRatio < PITCH_DOWN_MIN
+            downFrame  = pitchRatio < PITCH_DOWN_MIN
+            strongDown = downFrame
           } else {
             const pitchDrop  = baselinePitchRef.current - pitchRatio
             const gazeDrop   = gazeRatio - baselineGazeRef.current
             const headDown   = pitchDrop > PHONE_PITCH_DROP
             const eyesDown   = gazeDrop  > PHONE_GAZE_DROP
             const borderline = pitchDrop > PHONE_PITCH_DROP * 0.6 || gazeDrop > PHONE_GAZE_DROP * 0.6
-            downFrame = headDown || eyesDown || (earLow && borderline)
+            strongDown = headDown || eyesDown
+            downFrame  = strongDown || (earLow && borderline)
           }
 
           if (downFrame) {
-            phoneDownStreakMsRef.current += dt
+            // Only strong signals (head/eyes clearly down) build the cancel streak — the noisy
+            // EAR-booster path may feed the accumulator but must never cancel a resume countdown
+            phoneDownStreakMsRef.current = strongDown ? phoneDownStreakMsRef.current + dt : 0
             lastDownFrameAtRef.current = frameNow
-            // Only a sustained look-down cancels the resume countdown — a single
-            // misclassified flicker frame (~33ms of landmark noise) must not restart the 5s wait
-            if (phoneDownStreakMsRef.current > PHONE_RESUME_CANCEL_MS) phoneResumeStartRef.current = null
+            if (phoneDownStreakMsRef.current > PHONE_RESUME_CANCEL_MS) {
+              phoneResumeStartRef.current = null
+              resumePitchBufRef.current   = []
+              resumeGazeBufRef.current    = []
+            }
             phoneScoreRef.current = Math.min(phoneScoreRef.current + dt, PHONE_TRIGGER_MS)
             const freshState = useStore.getState()
-            if (phoneScoreRef.current >= PHONE_TRIGGER_MS && freshState.pomodoroState === 'work' && !phoneAutoPausedRef.current) {
+            if (phoneScoreRef.current >= PHONE_TRIGGER_MS && freshState.pomodoroState === 'work'
+                && !phoneAutoPausedRef.current && frameNow >= phoneCooldownUntilRef.current) {
               phoneAutoPausedRef.current = true
               freshState.setPomodoroState('paused')
               freshState.setPhoneDetected(true)
@@ -321,13 +390,31 @@ export function useEyeTracker(videoRef) {
               phoneAutoPausedRef.current = false
               phoneResumeStartRef.current = null
               phoneScoreRef.current = 0
+              resumePitchBufRef.current = []
+              resumeGazeBufRef.current  = []
+              phoneCooldownUntilRef.current = Date.now() + PHONE_COOLDOWN_MS
               freshState.setPhoneDetected(false)
               window.api?.overlay?.phoneDetected?.(false)
             } else if (phoneAutoPausedRef.current && freshState.pomodoroState === 'paused') {
               // 5-second sustained look-up before resuming
               if (!phoneResumeStartRef.current) phoneResumeStartRef.current = Date.now()
+              // These frames are confirmed screen-gaze — collect them to re-anchor baselines
+              resumePitchBufRef.current.push(pitchRatio)
+              resumeGazeBufRef.current.push(gazeRatio)
               const resumeMs = Date.now() - phoneResumeStartRef.current
               if (resumeMs >= 5000) {
+                // Re-anchor: posture often shifts while handling the phone; without this the
+                // stale baselines keep classifying normal screen-gaze as "down" (and the
+                // drift EMA can never correct them, since it only runs on up-frames)
+                if (resumePitchBufRef.current.length >= 30) {
+                  const sp = [...resumePitchBufRef.current].sort((a, b) => a - b)
+                  const sg = [...resumeGazeBufRef.current].sort((a, b) => a - b)
+                  baselinePitchRef.current = sp[Math.floor(sp.length / 2)]
+                  baselineGazeRef.current  = sg[Math.floor(sg.length / 2)]
+                }
+                resumePitchBufRef.current = []
+                resumeGazeBufRef.current  = []
+                phoneCooldownUntilRef.current = Date.now() + PHONE_COOLDOWN_MS
                 phoneAutoPausedRef.current = false
                 phoneResumeStartRef.current = null
                 phoneScoreRef.current = 0
@@ -377,7 +464,7 @@ export function useEyeTracker(videoRef) {
                 const alpha = stableOpenFramesRef.current > 30 ? ALPHA_FAST : ALPHA_SLOW
                 openEyeEmaRef.current = openEyeEmaRef.current * (1 - alpha) + ear * alpha
               }
-              if (++postCalFramesRef.current % 50 === 0) {
+              if (++postCalFramesRef.current % 25 === 0) {
                 adaptiveThresholdRef.current = openEyeEmaRef.current * 0.75
                 s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
               }
@@ -486,6 +573,14 @@ export function useEyeTracker(videoRef) {
     gazeSamplesRef.current        = []
     phoneAutoPausedRef.current    = false
     phoneResumeStartRef.current   = null
+    phoneCooldownUntilRef.current = 0
+    resumePitchBufRef.current     = []
+    resumeGazeBufRef.current      = []
+    recalNextAtRef.current        = 0
+    recalWindowEndRef.current     = null
+    recalEarSamplesRef.current    = []
+    recalPitchSamplesRef.current  = []
+    recalGazeSamplesRef.current   = []
     s.setPhoneScorePct(0)
     s.setBlinkCount(0)
     s.setBlinkRate(0)
@@ -531,6 +626,14 @@ export function useEyeTracker(videoRef) {
     gazeSamplesRef.current        = []
     phoneAutoPausedRef.current    = false
     phoneResumeStartRef.current   = null
+    phoneCooldownUntilRef.current = 0
+    resumePitchBufRef.current     = []
+    resumeGazeBufRef.current      = []
+    recalNextAtRef.current        = 0
+    recalWindowEndRef.current     = null
+    recalEarSamplesRef.current    = []
+    recalPitchSamplesRef.current  = []
+    recalGazeSamplesRef.current   = []
     useStore.getState().setPhoneScorePct(0)
 
     const s = useStore.getState()
@@ -556,6 +659,11 @@ export function useEyeTracker(videoRef) {
     baselinePitchRef.current      = null
     baselineGazeRef.current       = null
     phoneScoreRef.current         = 0
+    recalNextAtRef.current        = 0
+    recalWindowEndRef.current     = null
+    recalEarSamplesRef.current    = []
+    recalPitchSamplesRef.current  = []
+    recalGazeSamplesRef.current   = []
     const s = useStore.getState()
     s.setCalibrationProgress(0)
     s.setCalibrationSampleCount(0)

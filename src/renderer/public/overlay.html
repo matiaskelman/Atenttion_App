@@ -233,7 +233,7 @@
       <button class="star-btn" data-v="3"><span class="face-dot" style="color:#a78bfa">●</span><span>Flow</span></button>
     </div>
     <div class="feedback-actions">
-      <button class="btn-skip" id="btnSkip">Skip <span id="countdown">(10)</span></button>
+      <button class="btn-skip" id="btnSkip">Skip <span id="countdown">(60)</span></button>
     </div>
   </div>
 
@@ -253,7 +253,7 @@
 
     function startCountdown() {
       clearCountdown()
-      let remaining = 10
+      let remaining = 60
       countdownEl.textContent = '(' + remaining + ')'
       countdownInterval = setInterval(() => {
         remaining--
