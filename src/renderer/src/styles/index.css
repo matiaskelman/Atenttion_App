@@ -98,6 +98,28 @@
   50%       { transform: scaleY(1); }
 }
 
+/* Page transition — runs on every page swap (keyed remount) */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-page {
+  animation: page-in 0.22s ease-out;
+}
+
+/* Goal-reached toast */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-toast {
+  animation: toast-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page, .animate-toast, .animate-eq { animation: none; }
+}
+
 .animate-eq {
   animation: eq-bar 0.65s ease-in-out infinite;
   transform-origin: bottom;

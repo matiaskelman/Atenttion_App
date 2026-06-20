@@ -6,6 +6,11 @@ export const createPomodoroSlice = (set) => ({
   dailyGoalSeconds: 4 * 3600,
   ritualEnabled: true,
   focusWallpaperEnabled: false,
+  autoStartEyeTracking: true,
+  overlayEnabled: true,
+  baselineBpm: null,          // learned personal engaged blink rate (persisted); null until learned
+  baselineBpmConfidence: 0,   // qualifying sessions folded in — relative scoring engages past BASELINE_MIN_CONF
+  setBaselineBpm: (bpm, conf) => set({ baselineBpm: bpm, baselineBpmConfidence: conf }),
   setWorkDuration: (v) => set({ workDuration: v, timeLeft: v }),
   setShortBreakDuration: (v) => set({ shortBreakDuration: v }),
   setLongBreakDuration: (v) => set({ longBreakDuration: v }),
@@ -15,6 +20,8 @@ export const createPomodoroSlice = (set) => ({
   setDailyGoalSeconds: (v) => set({ dailyGoalSeconds: v }),
   setRitualEnabled: (v) => set({ ritualEnabled: v }),
   setFocusWallpaperEnabled: (v) => set({ focusWallpaperEnabled: v }),
+  setAutoStartEyeTracking: (v) => set({ autoStartEyeTracking: v }),
+  setOverlayEnabled: (v) => set({ overlayEnabled: v }),
   applyPreferences: (prefs) => set((s) => ({
     workDuration: prefs.workDuration ?? 25 * 60,
     shortBreakDuration: prefs.shortBreakDuration ?? 5 * 60,
@@ -25,7 +32,12 @@ export const createPomodoroSlice = (set) => ({
     dailyGoalSeconds: prefs.dailyGoalSeconds ?? 4 * 3600,
     ritualEnabled: prefs.ritualEnabled ?? true,
     focusWallpaperEnabled: prefs.focusWallpaperEnabled ?? false,
+    autoStartEyeTracking: prefs.autoStartEyeTracking ?? true,
+    overlayEnabled: prefs.overlayEnabled ?? true,
+    baselineBpm: prefs.baselineBpm ?? null,
+    baselineBpmConfidence: prefs.baselineBpmConfidence ?? 0,
     streak: prefs.streak ?? 0,
+    bestStreak: prefs.bestStreak ?? 0,
     lastSessionDate: prefs.lastSessionDate ?? null,
     ...(s.pomodoroState === 'idle' ? { timeLeft: prefs.workDuration ?? 25 * 60 } : {})
   })),

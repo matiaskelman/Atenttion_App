@@ -1,6 +1,7 @@
-import { Eye, EyeOff, Loader2, AlertTriangle, Activity, CheckCircle2 } from 'lucide-react'
+import { useState } from 'react'
+import { Eye, EyeOff, Loader2, AlertTriangle, Activity, CheckCircle2, ChevronDown } from 'lucide-react'
 import { useStore } from '../store'
-import { findBracket } from '../constants/blinksConfig'
+import { findBracket, getRelativeState, SCORE_CONFIG } from '../constants/blinksConfig'
 
 function blinkRhythm(cv) {
   if (cv === null) return null
@@ -26,12 +27,18 @@ export default function EyeTracker({ controls }) {
   const {
     eyeTrackingActive, eyeStatus, blinkCount, blinkRate,
     blinkVariability, liveFocusScore, modelLoaded, modelLoading, lookingAwaySeconds, camError, modelError,
-    phoneDetected
+    phoneDetected, baselineBpm, baselineBpmConfidence
   } = useStore()
   const { startCam, stopCam } = controls
+  const [showDetails, setShowDetails] = useState(false)
 
   const rhythm  = blinkRhythm(blinkVariability)
+  // Prefer the honest, baseline-RELATIVE state once a personal baseline is learned; otherwise fall
+  // back to the absolute BPM brackets. `display` drives the BPM label/colour + the feedback banner.
+  const relState = (baselineBpmConfidence >= SCORE_CONFIG.BASELINE_MIN_CONF && baselineBpm)
+    ? getRelativeState(blinkRate, baselineBpm) : null
   const bracket = getBpmBracket(blinkRate)
+  const display = relState || bracket
   const cfg     = statusConfig[eyeStatus] || statusConfig.unknown
 
   return (
@@ -87,8 +94,8 @@ export default function EyeTracker({ controls }) {
           </div>
           <div className="stat-mini">
             <span className="stat-label">BPM</span>
-            <span className={`stat-value ${bracket?.color || ''}`}>{blinkRate}</span>
-            {bracket && <span className={`text-[9px] ${bracket.color}`}>{bracket.label}</span>}
+            <span className={`stat-value ${display?.color || ''}`}>{blinkRate}</span>
+            {display && <span className={`text-[9px] ${display.color}`}>{display.label}</span>}
           </div>
           <div className="stat-mini">
             <span className="stat-label">Focus</span>
@@ -103,22 +110,44 @@ export default function EyeTracker({ controls }) {
         </div>
       )}
 
-      {/* Cognitive state feedback — shown only for brackets that need a nudge */}
-      {eyeTrackingActive && bracket?.msg && (
-        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${bracket.bg}`}>
-          <Activity size={12} className={`${bracket.color} shrink-0`} />
-          <p className={`text-xs ${bracket.color}`}>{bracket.msg}</p>
+      {/* Feedback nudge — shown only for states that warrant one */}
+      {eyeTrackingActive && display?.msg && (
+        <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${display.bg}`}>
+          <Activity size={12} className={`${display.color} shrink-0`} />
+          <p className={`text-xs ${display.color}`}>{display.msg}</p>
         </div>
       )}
 
-      {/* Blink rhythm indicator */}
-      {eyeTrackingActive && rhythm && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3">
-          <Activity size={12} className={`${rhythm.color} shrink-0`} />
-          <div className="flex flex-col">
-            <span className={`text-xs font-medium ${rhythm.color}`}>Rhythm: {rhythm.label}</span>
-            <span className="text-[10px] text-neutral-600">{rhythm.tip}</span>
-          </div>
+      {/* Secondary indicators tucked behind a Details expander to keep the card calm */}
+      {eyeTrackingActive && (
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors self-start"
+          >
+            <ChevronDown size={11} className={`transition-transform ${showDetails ? 'rotate-180' : ''}`} />
+            {showDetails ? 'Hide details' : 'Details'}
+          </button>
+
+          {showDetails && (
+            <>
+              {/* Honest framing: this is an estimate, personalized once a baseline exists */}
+              <p className="text-[10px] text-neutral-600 leading-snug">
+                Focus is an estimate from your blink patterns{relState ? ' vs your own baseline' : ''} — affected by dry eyes, lighting & screen distance.
+              </p>
+
+              {/* Blink rhythm indicator */}
+              {rhythm && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3">
+                  <Activity size={12} className={`${rhythm.color} shrink-0`} />
+                  <div className="flex flex-col">
+                    <span className={`text-xs font-medium ${rhythm.color}`}>Rhythm: {rhythm.label}</span>
+                    <span className="text-[10px] text-neutral-600">{rhythm.tip}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

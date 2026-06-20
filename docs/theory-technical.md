@@ -161,11 +161,11 @@ A fixed EAR threshold fails across users because resting open-eye EAR varies sig
 Every frame where `ear > CALIBRATION_OPEN_MIN (0.15)` is recorded as an open-eye sample. After `CALIBRATION_WINDOW_MS = 10000` ms, if at least 30 samples were collected:
 
 ```
-threshold = P75(samples) × 0.75
+threshold = P75(samples) × EAR_THRESHOLD_RATIO (0.85)
 openEyeEMA = P75(samples)
 ```
 
-The **75th percentile** is used instead of the mean. This is robust to the user blinking a few times during calibration — those low-EAR frames do not drag the estimate down. Multiplying by 0.75 places the threshold 25% below the typical open-eye EAR, giving a comfortable margin above the blink-closed range.
+The **75th percentile** is used instead of the mean. This is robust to the user blinking a few times during calibration — those low-EAR frames do not drag the estimate down. Multiplying by `EAR_THRESHOLD_RATIO` (0.85) places the threshold 15% below the typical open-eye EAR — close enough to catch the light, partial blinks common at a screen, with the blendshape cross-check rejecting the extra noise.
 
 If fewer than 30 samples are collected (e.g., user looked away for most of the window), the fallback is the static `EAR_THRESHOLD = 0.20`.
 
@@ -187,15 +187,15 @@ openEyeEMA = openEyeEMA × (1 − alpha) + ear × alpha
 
 | Mode | Alpha | Approx. half-life |
 |---|---|---|
-| ALPHA_SLOW | 0.008 | ~86 frames, 2.8 s |
-| ALPHA_FAST | 0.030 | ~23 frames, 0.8 s |
+| ALPHA_SLOW | 0.016 | ~43 frames, 1.4 s |
+| ALPHA_FAST | 0.060 | ~11 frames, 0.4 s |
 
 `ALPHA_SLOW` is the default — it changes the EMA slowly enough that brief squints and partial blinks do not corrupt the open-eye estimate. `ALPHA_FAST` engages when the eye has been stable for > 30 consecutive frames (~1 s), allowing rapid convergence after a significant head-pose change.
 
 **Threshold update** — every 50 post-calibration frames:
 
 ```
-adaptiveThreshold = openEyeEMA × 0.75
+adaptiveThreshold = openEyeEMA × EAR_THRESHOLD_RATIO (0.85)
 ```
 
 ---
@@ -224,13 +224,26 @@ if ear < adaptiveThreshold:
 openThreshold = adaptiveThreshold + EAR_HYSTERESIS (0.02)
 
 if ear >= openThreshold:
-    if isBlinking && blinkFrames <= BLINK_MAX_FRAMES (15):
+    blendOk = blendBlink === null OR maxBlendDuringClosure >= BLEND_BLINK_MIN (0.15)
+    if isBlinking && blinkFrames <= BLINK_MAX_FRAMES (15) && blendOk:
         COUNT BLINK
+        record closure duration = now − blinkOnsetAt   // feeds fatigue (mean closure)
         earBuffer = []          // reset smoothing buffer
     blinkFrames = 0
     isBlinking = false
     eyeStatus = 'looking'
 ```
+
+**Blendshape cross-check** — `FaceLandmarker` is created with `outputFaceBlendshapes: true`,
+exposing trained `eyeBlinkLeft` / `eyeBlinkRight` (0 = open, 1 = closed). During a closure the
+peak mean blink blendshape is tracked; a blink is only counted if that peak cleared
+`BLEND_BLINK_MIN`. This rejects EAR false positives (jitter, partial occlusion, lighting) that
+the geometric ratio alone would miscount. If blendshapes are unavailable (`blendBlink === null`),
+the gate is skipped — pure-EAR fallback, no behaviour change.
+
+**Blink duration** — closure onset is timestamped when EAR first drops below threshold; at the
+rising edge the duration is recorded. The session mean feeds the fatigue factor (long, slow
+closures indicate drowsiness).
 
 **Dead zone** — when `adaptiveThreshold ≤ ear < openThreshold` (a 0.02 EAR band), neither the closing nor the opening branch fires. This prevents rapid oscillation at the threshold boundary when EAR is noisy.
 
@@ -242,7 +255,8 @@ if ear >= openThreshold:
 
 ### 7.1 Blink Rate (BPM)
 
-A timestamp is pushed to `blinkTimesRef` on every confirmed blink. At the end of each blink:
+A timestamp is pushed to `blinkTimesRef` on every confirmed blink. The rate is computed by
+`recomputeRate(now)`:
 
 ```
 blinkTimesRef = blinkTimesRef.filter(t => now − t < 60000)   // keep last 60 s
@@ -251,7 +265,13 @@ denominator = clamp(elapsed, 20000, 60000)                   // ms
 liveBPM = round(blinkTimesRef.length × 60000 / denominator)
 ```
 
-Clamping the denominator to a minimum of 20 s prevents wild BPM spikes in the first few seconds. Before 20 s of data, BPM is reported as if 20 s had elapsed, which under-reports the rate slightly but avoids misleading values (e.g., 3 blinks in 5 s would otherwise show 36 BPM).
+**Decay (important):** `recomputeRate` runs both on each confirmed blink **and on a ~1 s loop
+tick** (`RATE_RECOMPUTE_MS`). Previously BPM and the live score were only recomputed *on a blink*,
+so when blinking slowed or stopped (deep focus / blink suppression) they froze at the last value —
+hiding the very state the app cares about and letting the time-weighted cognitive accumulator
+compound a stale score. Recomputing on the loop makes the rate fall as old timestamps age out.
+
+Clamping the denominator to a minimum of 20 s prevents wild BPM spikes in the first few seconds.
 
 ### 7.2 Blink Variability (CV)
 
@@ -263,7 +283,10 @@ std  = sqrt(mean of (interval − mean)²)
 CV   = std / mean
 ```
 
-At least 3 intervals are required before CV is reported. CV is dimensionless — it normalises rhythm irregularity to rate, so a slow blinker and a fast blinker with the same degree of rhythm irregularity get the same CV.
+At least `CV_MIN_INTERVALS` (6) intervals are required before CV is reported and allowed to
+influence the score — a CV from 2–3 samples is statistically meaningless yet it carries 45 % of
+the live estimate. CV is dimensionless — it normalises rhythm irregularity to rate, so a slow
+blinker and a fast blinker with the same degree of rhythm irregularity get the same CV.
 
 | CV | Rhythm label | Interpretation |
 |---|---|---|
@@ -275,17 +298,25 @@ At least 3 intervals are required before CV is reported. CV is dimensionless —
 
 ## 8. Focus Score
 
-Computed on every confirmed blink via `computeFocusScore(bpm, cv)` in `src/renderer/src/utils/focusScore.js`.
+Computed via `computeFocusScore(bpm, cv, baselineBpm)` in `src/renderer/src/utils/focusScore.js`.
+See `docs/blinksInfo.md` for the honesty framing — the score is an **estimate**, and the rate axis
+is **personalized** (relative to the user's own learned baseline) whenever one is available.
 
 ### 8.1 Rate Score
 
-The current BPM is looked up in `BPM_BRACKETS` (`src/renderer/src/constants/blinksConfig.js`). Each bracket defines `scoreAtMin` and `scoreAtMax`; the rate score is linearly interpolated across the bracket's BPM range:
+**Primary (personalized).** Once `baselineBpmConfidence ≥ BASELINE_MIN_CONF (2)`, the rate score is
+a function of `r = bpm / baselineBpm` via `computeRelativeRateScore` (piecewise-linear over
+`REL_RATE_CURVE`): `r ≈ 1` → 100, `r ≪ 1` → high-but-tapered (deep focus, mild strain), `r ≫ 1` →
+low (above the user's own norm → tiring / drifting). The baseline is learned per-user in
+`usePomodoro` (EMA of `blinks ÷ on-task minutes` across qualifying sessions) and persisted to
+`atenttion-preferences.json`.
+
+**Fallback (new users).** Before a confident baseline exists, the absolute `BPM_BRACKETS` are used,
+linearly interpolated within the matched bracket:
 
 ```
 rateScore = round(scoreAtMin + (bpm − min) / (max − min) × (scoreAtMax − scoreAtMin))
 ```
-
-Brackets with flat scores (A and F) have `scoreAtMin == scoreAtMax`.
 
 | Bracket | BPM range | scoreAtMin | scoreAtMax |
 |---|---|---|---|
@@ -295,6 +326,8 @@ Brackets with flat scores (A and F) have `scoreAtMin == scoreAtMax`.
 | D | 26 – 45 | 65 | 45 |
 | E | 46 – 65 | 40 | 20 |
 | F | 66+ | 10 | 10 |
+
+These brackets are heuristic, not validated science — see the honesty statement in `blinksInfo.md`.
 
 ### 8.2 Rhythm Score
 
@@ -310,7 +343,23 @@ else:              rhythmScore = max(0, round(50 − (CV − 0.70) / 0.30 × 50)
 focusScore = round(rateScore × 0.55 + rhythmScore × 0.45)
 ```
 
-The 55/45 weighting gives blink rate slightly more influence than rhythm. If CV is not yet available (< 3 intervals), `focusScore = rateScore` (unweighted).
+The 55/45 weighting gives blink rate slightly more influence than rhythm. If CV is not yet available (< 6 intervals), `focusScore = rateScore` (unweighted).
+
+### 8.4 Session score + fatigue
+
+The saved per-session number (`computeSessionScore`) is the time-weighted average of the live
+estimate over on-screen frames, scaled by behavioural penalties **and a fatigue factor**:
+
+```
+finalScore = cognitiveAvg × presenceFactor × phoneFactor × driftFactor × fatigueFactor
+fatigueFactor = 1 − min(perclosPen + closurePen, FATIGUE_CAP = 0.25)
+```
+
+`perclosPen` rises once session **PERCLOS** (eyes-closed fraction over valid frames) exceeds
+`PERCLOS_FLOOR (0.12)`; `closurePen` rises once **mean blink-closure duration** exceeds
+`CLOSURE_FLOOR_MS (350)`. PERCLOS/closure are accumulated in the eye-tracker slice and diffed at
+session boundaries (same snapshot pattern as the cognitive accumulator). These are the validated
+drowsiness markers, so real fatigue lowers the score even when blink rate looks normal.
 
 ---
 
@@ -333,8 +382,17 @@ The 55/45 weighting gives blink rate slightly more influence than rhythm. If CV 
 | `EAR_VALID_MAX` | 0.60 | Above this = bad frame |
 | `TALK_THRESHOLD` | 0.22 | Jaw-open ratio above which blink detection is suppressed |
 | `POSE_GUARD_FRAMES` | 3 | Consecutive bad-pose frames required before suppression fires |
-| `ALPHA_SLOW` | 0.008 | EMA rate during normal tracking (~2.8 s half-life) |
-| `ALPHA_FAST` | 0.030 | EMA rate when eye is stably open for > 30 frames (~0.8 s half-life) |
+| `ALPHA_SLOW` | 0.016 | EMA rate during normal tracking |
+| `ALPHA_FAST` | 0.060 | EMA rate when eye is stably open / head-down adaptation |
+| `EAR_THRESHOLD_RATIO` | 0.85 | Adaptive threshold = restingEAR × this (closer to resting catches lighter blinks) |
+| `BLEND_BLINK_MIN` | 0.15 | Trained blink blendshape must peak above this for a blink to count (low → only rejects gross non-blinks) |
+| `RATE_RECOMPUTE_MS` | 1000 | Loop cadence for recomputing BPM/score (rate decay) |
+| `AWAY_PAUSE_GRACE_MS` | 4000 | Extra sustained absence beyond the away threshold before auto-pause |
+| `PHONE_STATIONARY_MAX` | 0.025 | Max down-gaze spread (÷ eyeSpan) to treat as a phone (vs scanning notes) |
+| `PERCLOS_EMA_ALPHA` | 0.003 | EMA for the live PERCLOS readout (~30 s window) |
+| `CV_MIN_INTERVALS` | 6 | Inter-blink intervals required before CV influences the score |
+| `BASELINE_MIN_CONF` | 2 | Qualifying sessions before personalized (relative) scoring engages |
+| `BASELINE_ALPHA` | 0.25 | EMA weight folding a session's mean BPM into the personal baseline |
 
 ---
 
@@ -348,9 +406,17 @@ awayMs = Date.now() − awayStartRef
 eyeStatus = awayMs > eyeAwayThresholdMs ? 'away' : (unchanged)
 ```
 
-`eyeAwayThresholdMs` is a user preference (default 3000 ms, persisted to `atenttion-preferences.md`).
+`eyeAwayThresholdMs` is a user preference (default 5000 ms, persisted to
+`atenttion-preferences.json`).
 
-When the threshold is exceeded and the Pomodoro is in `'work'` state, the timer is automatically paused (`pomodoroState → 'paused'`) and `autoPausedRef = true` is set.
+**Status vs. pause are now separated** (reduces over-pausing on think-glances): `eyeStatus`
+flips to `'away'` at the threshold so the user gets feedback, but an **ordinary auto-pause only
+fires once absence is sustained past `threshold + AWAY_PAUSE_GRACE_MS (4000)`** — so reaching for
+coffee or leaning back to think for a few seconds no longer kills the timer. A face that is
+*visible but turned/tilted off-screen* stays `'not-tracking'` (pose-suppressed) and never triggers
+an away-pause. Phone-branded pauses (downward-gaze) remain responsive at the threshold.
+
+When the auto-pause fires in `'work'` state, `pomodoroState → 'paused'` and `autoPausedRef = true`.
 
 When the face reappears:
 

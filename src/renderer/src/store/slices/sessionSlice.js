@@ -2,10 +2,13 @@ export const createSessionSlice = (set, get) => ({
   sessions: [],
   todayFocusSeconds: 0,
   streak: 0,
+  bestStreak: 0,
   lastSessionDate: null,
   addSession: (session) =>
     set((s) => ({
-      sessions: [...s.sessions.slice(-99), session],
+      // Keep the in-memory window aligned with the on-disk cap (1000, see
+      // appendSessionJson in persistence.js) so Stats/export see the full history.
+      sessions: [...s.sessions.slice(-999), session],
       todayFocusSeconds: s.todayFocusSeconds + session.duration
     })),
   applySessionHistory: (sessions) => {
@@ -13,7 +16,7 @@ export const createSessionSlice = (set, get) => ({
     const todayFocusSeconds = sessions
       .filter((s) => new Date(s.date).toLocaleDateString('en-CA') === today)
       .reduce((sum, s) => sum + s.duration, 0)
-    set({ sessions: sessions.slice(-100), todayFocusSeconds })
+    set({ sessions: sessions.slice(-1000), todayFocusSeconds })
   },
   setStreak: (v) => set({ streak: v }),
   setLastSessionDate: (d) => set({ lastSessionDate: d }),
@@ -31,7 +34,8 @@ export const createSessionSlice = (set, get) => ({
       )
       newStreak = diffDays === 1 ? newStreak + 1 : 1
     }
-    set({ streak: newStreak, lastSessionDate: today })
-    return { streak: newStreak, lastSessionDate: today }
+    const newBestStreak = Math.max(s.bestStreak || 0, newStreak)
+    set({ streak: newStreak, bestStreak: newBestStreak, lastSessionDate: today })
+    return { streak: newStreak, bestStreak: newBestStreak, lastSessionDate: today }
   }
 })

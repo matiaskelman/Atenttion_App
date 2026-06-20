@@ -1,3 +1,4 @@
+import { useState, useRef } from 'react'
 import { Play, Pause, RotateCcw, SkipForward } from 'lucide-react'
 import { useStore } from '../store'
 import { formatTime } from '../utils/format'
@@ -24,6 +25,24 @@ export default function Pomodoro({ controls }) {
   const progress = 1 - timeLeft / totalDuration
   const isRunning = pomodoroState === 'work' || pomodoroState === 'break'
   const colors = modeColor[pomodoroMode]
+
+  // Reset needs a confirm step when a session is in progress (running, paused, or
+  // partially elapsed) so an accidental click can't silently wipe it.
+  const [confirmReset, setConfirmReset] = useState(false)
+  const confirmTimerRef = useRef(null)
+  const hasProgress = isRunning || pomodoroState === 'paused' || progress > 0
+
+  const handleReset = () => {
+    if (!hasProgress) { reset(); return }
+    if (confirmReset) {
+      clearTimeout(confirmTimerRef.current)
+      setConfirmReset(false)
+      reset()
+    } else {
+      setConfirmReset(true)
+      confirmTimerRef.current = setTimeout(() => setConfirmReset(false), 3000)
+    }
+  }
 
   // SVG ring
   const size = 220
@@ -71,9 +90,9 @@ export default function Pomodoro({ controls }) {
       {/* Controls */}
       <div className="flex items-center gap-3">
         <button
-          onClick={reset}
-          className="btn-icon text-neutral-500 hover:text-neutral-300"
-          title="Reset"
+          onClick={handleReset}
+          className={`btn-icon ${confirmReset ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-500 hover:text-neutral-300'}`}
+          title={confirmReset ? 'Click again to reset' : 'Reset'}
         >
           <RotateCcw size={16} />
         </button>
@@ -100,6 +119,11 @@ export default function Pomodoro({ controls }) {
           <SkipForward size={16} />
         </button>
       </div>
+
+      {/* Reset confirm hint */}
+      {confirmReset && (
+        <p className="text-xs text-amber-400 -mt-2">Click reset again to discard this session</p>
+      )}
 
       {/* Session dots */}
       <div className="flex items-center gap-2">

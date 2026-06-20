@@ -1,6 +1,8 @@
 import { useRef, useEffect, useCallback } from 'react'
 import { useStore } from '../store'
-import { computeFocusScore } from '../utils/focusScore'
+import { computeSessionScore } from '../utils/focusScore'
+import { SCORE_CONFIG } from '../constants/blinksConfig'
+import { buildPrefs } from '../utils/prefs'
 import { playBeep, playFocusEndTick, playBreakEndTick } from '../utils/audio'
 
 // Sessions within this window are considered the same block — ritual shown only once per block
@@ -14,6 +16,7 @@ export function usePomodoro() {
   const awayStartRef = useRef(0)
   const sessionStartBlinkRef = useRef(0)
   const phonePickupsStartRef = useRef(0)
+  const scoreAccumStartRef = useRef({ weightedSum: 0, presentMs: 0, sampleIndex: 0 })
   const lastSessionEndedAtRef = useRef(0)
   const ritualDataRef = useRef(null)   // goal+mood captured at confirmPreRitual; lives for the whole block
   // Holds completed session data between work-end and post-ritual confirmation
@@ -31,6 +34,60 @@ export function usePomodoro() {
     const { appUsageFocus, appUsageBreak } = useStore.getState()
     window.api?.data.saveAppUsage({ focus: appUsageFocus, break: appUsageBreak })
       .catch((e) => console.error('[saveAppUsage] IPC error:', e))
+  }
+
+  // Snapshot the running counters at the start of a work session; deltas at completion give
+  // per-session values. Call at EVERY work-session start — missing one corrupts that session's score.
+  const snapshotSessionStart = (s) => {
+    sessionStartBlinkRef.current = s.blinkCount
+    awayStartRef.current = s.totalLookingAwaySeconds
+    phonePickupsStartRef.current = s.phonePickupsTotal
+    scoreAccumStartRef.current = {
+      weightedSum: s.cogScoreWeightedSum,
+      presentMs: s.cogScorePresentMs,
+      sampleIndex: s.cogScoreSamples.length,
+      eyeClosedMs: s.eyeClosedMs,
+      eyeValidMs: s.eyeValidMs,
+      blinkDurSumMs: s.blinkDurSumMs,
+      blinkDurCount: s.blinkDurCount
+    }
+  }
+
+  // Build { focusScore, scoreConfidence } for a completed work session from the accumulator deltas.
+  const buildSessionScore = (s, duration, blinkCount, awaySeconds, phonePickups) => {
+    const start = scoreAccumStartRef.current
+    const presentMs = Math.max(0, s.cogScorePresentMs - start.presentMs)
+    const cognitiveAvg = presentMs > 0 ? (s.cogScoreWeightedSum - start.weightedSum) / presentMs : null
+    const cogSamples = s.cogScoreSamples.slice(start.sampleIndex).map((x) => x.v)
+    // Fatigue inputs from the session's PERCLOS + mean blink-closure accumulators (deltas).
+    const validMs = Math.max(0, s.eyeValidMs - start.eyeValidMs)
+    const closedMs = Math.max(0, s.eyeClosedMs - start.eyeClosedMs)
+    const perclos = validMs > 0 ? closedMs / validMs : 0
+    const durCount = Math.max(0, s.blinkDurCount - start.blinkDurCount)
+    const durSum = Math.max(0, s.blinkDurSumMs - start.blinkDurSumMs)
+    const meanClosureMs = durCount > 0 ? durSum / durCount : 0
+    const { score, confidence } = computeSessionScore({
+      cognitiveAvg, cogSamples, awaySeconds, phonePickups,
+      duration, presentSeconds: presentMs / 1000, blinkCount, perclos, meanClosureMs
+    })
+    return { focusScore: score, scoreConfidence: confidence }
+  }
+
+  // Learn the user's own engaged blink baseline from a completed session and persist it (EMA across
+  // sessions). The session's mean BPM = blinks / on-task minutes (on-task time excludes away/phone
+  // pauses, so this approximates "blink rate while focused"). Qualifying sessions only; implausible
+  // rates are ignored. Updates the store and returns the prefs override to persist, or null.
+  const learnBaseline = (s, duration, blinkCount) => {
+    if (duration < 120 || blinkCount < 8) return null
+    const sessionMeanBpm = blinkCount / (duration / 60)
+    if (sessionMeanBpm < 3 || sessionMeanBpm > 60) return null
+    const prev = s.baselineBpm
+    const a = SCORE_CONFIG.BASELINE_ALPHA
+    const next = prev == null ? sessionMeanBpm : prev * (1 - a) + sessionMeanBpm * a
+    const conf = (s.baselineBpmConfidence || 0) + 1
+    const baselineBpm = Math.round(next * 10) / 10
+    s.setBaselineBpm(baselineBpm, conf)
+    return { baselineBpm, baselineBpmConfidence: conf }
   }
 
   const clearTimer = useCallback(() => {
@@ -67,16 +124,20 @@ export function usePomodoro() {
         if (s.pomodoroMode === 'work') {
           const sessionBPM = s.blinkRate
           const cv = s.blinkVariability
-          const focusScore = computeFocusScore(sessionBPM, cv)
+          const blinkCount = s.blinkCount - sessionStartBlinkRef.current
+          const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
+          const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
+          const { focusScore, scoreConfidence } = buildSessionScore(s, s.workDuration, blinkCount, awaySeconds, phonePickups)
           const sessionData = {
             date: new Date().toISOString(),
             duration: s.workDuration,
-            blinkCount: s.blinkCount - sessionStartBlinkRef.current,
+            blinkCount,
             blinkRate: sessionBPM,
             blinkVariability: cv,
             focusScore,
-            awaySeconds: s.totalLookingAwaySeconds - awayStartRef.current,
-            phonePickups: s.phonePickupsTotal - phonePickupsStartRef.current,
+            scoreConfidence,
+            awaySeconds,
+            phonePickups,
             appUsage: { ...s.appUsageFocus }
           }
 
@@ -96,20 +157,11 @@ export function usePomodoro() {
             s.addSession(sessionData)
             saveSession(sessionData)
             s.incrementSessions()
-            const { streak: newStreak1, lastSessionDate: today1 } = useStore.getState().updateStreak()
-            window.api?.data.savePreferences({
-              workDuration: s.workDuration,
-              shortBreakDuration: s.shortBreakDuration,
-              longBreakDuration: s.longBreakDuration,
-              eyeAwayThresholdMs: s.eyeAwayThresholdMs,
-              notifyOnAutoPause: s.notifyOnAutoPause,
-              soundOnAutoPause: s.soundOnAutoPause,
-              dailyGoalSeconds: s.dailyGoalSeconds,
-              ritualEnabled: s.ritualEnabled,
-              focusWallpaperEnabled: s.focusWallpaperEnabled,
-              streak: newStreak1,
-              lastSessionDate: today1
-            }).catch(() => {})
+            const learned1 = learnBaseline(s, s.workDuration, blinkCount)
+            const { streak: newStreak1, bestStreak: newBest1, lastSessionDate: today1 } = useStore.getState().updateStreak()
+            window.api?.data.savePreferences(
+              buildPrefs(s, { streak: newStreak1, bestStreak: newBest1, lastSessionDate: today1, ...(learned1 || {}) })
+            ).catch(() => {})
             lastSessionEndedAtRef.current = Date.now()
             notify('Atenttion', 'Work session complete! Take a break.')
             const nextCount = s.sessionsCompleted + 1
@@ -128,9 +180,7 @@ export function usePomodoro() {
           playBeep()
           s.setPomodoroMode('work')
           s.setTimeLeft(s.workDuration)
-          sessionStartBlinkRef.current = s.blinkCount
-          awayStartRef.current = s.totalLookingAwaySeconds
-          phonePickupsStartRef.current = s.phonePickupsTotal
+          snapshotSessionStart(s)
           s.setPomodoroState('work')
           setTimeout(() => startTimer(), 50)
         } else {
@@ -139,7 +189,7 @@ export function usePomodoro() {
           s.setPomodoroMode('work')
           s.setTimeLeft(s.workDuration)
           s.setPomodoroState('idle')
-          sessionStartBlinkRef.current = s.blinkCount
+          snapshotSessionStart(s)
         }
       } else {
         s.setTimeLeft(next)
@@ -152,9 +202,7 @@ export function usePomodoro() {
     const s = useStore.getState()
     ritualDataRef.current = { goal: s.ritualGoal, moodBefore: s.ritualMoodBefore }
     s.setShowRitualModal(false)
-    sessionStartBlinkRef.current = s.blinkCount
-    awayStartRef.current = s.totalLookingAwaySeconds
-    phonePickupsStartRef.current = s.phonePickupsTotal
+    snapshotSessionStart(s)
     s.setPomodoroState('work')
     startTimer()
   }, [startTimer])
@@ -172,20 +220,11 @@ export function usePomodoro() {
     s.addSession(finalSession)
     saveSession(finalSession)
     s.incrementSessions()
-    const { streak: newStreak2, lastSessionDate: today2 } = useStore.getState().updateStreak()
-    window.api?.data.savePreferences({
-      workDuration: s.workDuration,
-      shortBreakDuration: s.shortBreakDuration,
-      longBreakDuration: s.longBreakDuration,
-      eyeAwayThresholdMs: s.eyeAwayThresholdMs,
-      notifyOnAutoPause: s.notifyOnAutoPause,
-      soundOnAutoPause: s.soundOnAutoPause,
-      dailyGoalSeconds: s.dailyGoalSeconds,
-      ritualEnabled: s.ritualEnabled,
-      focusWallpaperEnabled: false,
-      streak: newStreak2,
-      lastSessionDate: today2
-    }).catch(() => {})
+    const learned2 = learnBaseline(s, finalSession.duration, finalSession.blinkCount)
+    const { streak: newStreak2, bestStreak: newBest2, lastSessionDate: today2 } = useStore.getState().updateStreak()
+    window.api?.data.savePreferences(
+      buildPrefs(s, { streak: newStreak2, bestStreak: newBest2, lastSessionDate: today2, ...(learned2 || {}) })
+    ).catch(() => {})
     lastSessionEndedAtRef.current = Date.now()
     s.setShowRitualModal(false)
     // ritualDataRef kept alive so consecutive block sessions inherit the same goal+mood
@@ -217,9 +256,7 @@ export function usePomodoro() {
           s.setShowRitualModal(true)
           return
         }
-        sessionStartBlinkRef.current = s.blinkCount
-        awayStartRef.current = s.totalLookingAwaySeconds
-        phonePickupsStartRef.current = s.phonePickupsTotal
+        snapshotSessionStart(s)
       }
       s.setPomodoroState('work')
       startTimer()
@@ -251,35 +288,31 @@ export function usePomodoro() {
       if (elapsed > 60) {
         const cv = s.blinkVariability
         const rd = ritualDataRef.current
+        const blinkCount = s.blinkCount - sessionStartBlinkRef.current
+        const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
+        const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
+        const { focusScore, scoreConfidence } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
         const sessionData = {
           date: new Date().toISOString(),
           duration: elapsed,
-          blinkCount: s.blinkCount - sessionStartBlinkRef.current,
+          blinkCount,
           blinkRate: s.blinkRate,
           blinkVariability: cv,
-          focusScore: computeFocusScore(s.blinkRate, cv),
-          awaySeconds: s.totalLookingAwaySeconds - awayStartRef.current,
-          phonePickups: s.phonePickupsTotal - phonePickupsStartRef.current,
+          focusScore,
+          scoreConfidence,
+          awaySeconds,
+          phonePickups,
           appUsage: { ...s.appUsageFocus },
           ...(rd ? { ritual: true, goal: rd.goal, moodBefore: rd.moodBefore } : {})
         }
         s.addSession(sessionData)
         saveSession(sessionData)
         s.incrementSessions()
-        const { streak: newStreak3, lastSessionDate: today3 } = useStore.getState().updateStreak()
-        window.api?.data.savePreferences({
-          workDuration: s.workDuration,
-          shortBreakDuration: s.shortBreakDuration,
-          longBreakDuration: s.longBreakDuration,
-          eyeAwayThresholdMs: s.eyeAwayThresholdMs,
-          notifyOnAutoPause: s.notifyOnAutoPause,
-          soundOnAutoPause: s.soundOnAutoPause,
-          dailyGoalSeconds: s.dailyGoalSeconds,
-          ritualEnabled: s.ritualEnabled,
-          focusWallpaperEnabled: false,
-          streak: newStreak3,
-          lastSessionDate: today3
-        }).catch(() => {})
+        const learned3 = learnBaseline(s, elapsed, blinkCount)
+        const { streak: newStreak3, bestStreak: newBest3, lastSessionDate: today3 } = useStore.getState().updateStreak()
+        window.api?.data.savePreferences(
+          buildPrefs(s, { streak: newStreak3, bestStreak: newBest3, lastSessionDate: today3, ...(learned3 || {}) })
+        ).catch(() => {})
       }
       const nextCount = s.sessionsCompleted + 1
       if (nextCount % 4 === 0) {
@@ -292,7 +325,7 @@ export function usePomodoro() {
     } else {
       s.setPomodoroMode('work')
       s.setTimeLeft(s.workDuration)
-      sessionStartBlinkRef.current = s.blinkCount
+      snapshotSessionStart(s)
     }
     s.setPomodoroState('idle')
   }, [clearTimer])

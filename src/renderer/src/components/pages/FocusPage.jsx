@@ -1,12 +1,11 @@
 import Pomodoro from '../Pomodoro'
 import EyeTracker from '../EyeTracker'
-import Settings from '../Settings'
 import { useStore } from '../../store'
-import { Clock, Flame, Eye } from 'lucide-react'
+import { Clock, Flame, Zap } from 'lucide-react'
 import { formatDuration } from '../../utils/format'
 
 export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
-  const { todayFocusSeconds, sessions, blinkCount, dailyGoalSeconds, ritualGoal, pomodoroState, pomodoroMode } = useStore()
+  const { todayFocusSeconds, sessions, streak, bestStreak, dailyGoalSeconds, ritualGoal, pomodoroState, pomodoroMode } = useStore()
   const todaySessions = sessions.filter(
     (s) => new Date(s.date).toLocaleDateString('en-CA') === new Date().toLocaleDateString('en-CA')
   ).length
@@ -58,9 +57,12 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
           <span className="text-xs text-neutral-500">Sessions today</span>
         </div>
         <div className="card-sm">
-          <Eye size={14} className="text-emerald-400 mb-1" />
-          <span className="text-lg font-semibold text-neutral-100">{blinkCount}</span>
-          <span className="text-xs text-neutral-500">Blinks</span>
+          <Zap size={14} className="text-emerald-400 mb-1" />
+          <span className="text-lg font-semibold text-neutral-100">{streak ? `${streak}d` : '—'}</span>
+          <span className="text-xs text-neutral-500">Day streak</span>
+          {bestStreak > 0 && (
+            <span className="text-[10px] text-neutral-600 mt-0.5">best: {bestStreak}d</span>
+          )}
         </div>
       </div>
 
@@ -77,7 +79,6 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
         <Pomodoro controls={pomodoroControls} />
         <div className="flex flex-col gap-4">
           <EyeTracker controls={eyeTrackerControls} />
-          <Settings />
         </div>
       </div>
     </div>

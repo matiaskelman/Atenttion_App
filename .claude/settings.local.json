@@ -4,5 +4,20 @@
       "Bash(git add *)",
       "Bash(node scripts/setup-sounds.js)"
     ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "timeout": 10,
+            "statusMessage": "Checking for review request…",
+            "command": "try { $p = ([Console]::In.ReadToEnd() | ConvertFrom-Json).prompt } catch { exit 0 }; if ($p -match '(?i)(review|revisi|revisa|audit|analiz|analys|analyz)') { @{ hookSpecificOutput = @{ hookEventName = 'UserPromptSubmit'; additionalContext = 'A review may have been requested. If you produce a code/security/functionality review this turn, ALSO file it into the auto-memory file at C:\\Users\\Usuario\\.claude\\projects\\c--Users-Usuario-Desktop-AtenttionApp\\memory\\project_review.md (append or update its summary and keep the MEMORY.md index line current). The full review may also live at repo-root review.md, but project_review.md must capture or point to it.' } } | ConvertTo-Json -Compress }"
+          }
+        ]
+      }
+    ]
   }
 }

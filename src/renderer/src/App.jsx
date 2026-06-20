@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Matias Kelman. All rights reserved.
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useStore } from './store'
 import { usePomodoro } from './hooks/usePomodoro'
 import { useEyeTracker } from './hooks/useEyeTracker'
@@ -12,7 +12,12 @@ import StatsPage from './components/pages/StatsPage'
 import SystemPage from './components/pages/SystemPage'
 import AudiosPage from './components/pages/AudiosPage'
 import EyeDebugPage from './components/pages/EyeDebugPage'
+import SettingsPage from './components/pages/SettingsPage'
+import MilestonesPage from './components/pages/MilestonesPage'
 import RitualModal from './components/RitualModal'
+import GoalToast from './components/GoalToast'
+import { shallow } from 'zustand/shallow'
+import { buildPrefs } from './utils/prefs'
 
 export default function App() {
   const page = useStore((s) => s.page)
@@ -22,9 +27,52 @@ export default function App() {
   const showRitualModal = useStore((s) => s.showRitualModal)
   const ritualPhase = useStore((s) => s.ritualPhase)
   const ritualGoal = useStore((s) => s.ritualGoal)
+  const overlayEnabled = useStore((s) => s.overlayEnabled)
   const pomodoroControls = usePomodoro()
   const audioControls = useAudio()
   useAppTracker()
+
+  // Celebrate the moment the daily focus goal is crossed (once per crossing)
+  const [showGoalToast, setShowGoalToast] = useState(false)
+  const goalReachedRef = useRef(false)
+  useEffect(() => {
+    return useStore.subscribe(
+      (s) => s.dailyGoalSeconds > 0 && s.todayFocusSeconds >= s.dailyGoalSeconds,
+      (reached) => {
+        if (reached && !goalReachedRef.current) {
+          goalReachedRef.current = true
+          setShowGoalToast(true)
+        } else if (!reached) {
+          // Reset when a new day rolls over (todayFocusSeconds drops back below goal)
+          goalReachedRef.current = false
+        }
+      }
+    )
+  }, [])
+
+  // Autosave preferences (debounced) whenever any persisted field changes, so
+  // settings stick without a manual Save click. buildPrefs sends the full
+  // canonical payload, preserving the completeness guarantee. The first emission
+  // is the startup hydration (applyPreferences) — skipped so we don't re-write
+  // what we just loaded.
+  useEffect(() => {
+    let timer
+    let hydrated = false
+    const unsub = useStore.subscribe(
+      (s) => buildPrefs(s),
+      (prefs) => {
+        if (!hydrated) { hydrated = true; return }
+        clearTimeout(timer)
+        timer = setTimeout(() => {
+          window.api?.data.savePreferences(prefs)
+            .then(() => useStore.getState().markPrefsSaved())
+            .catch(() => {})
+        }, 600)
+      },
+      { equalityFn: shallow, fireImmediately: true }
+    )
+    return () => { clearTimeout(timer); unsub() }
+  }, [])
 
   const overlayFeedbackActiveRef = useRef(false)
 
@@ -39,7 +87,8 @@ export default function App() {
     }
   }, [showRitualModal, ritualPhase, ritualGoal])
 
-  // Auto-dismiss post-ritual modal after 10 s with no response
+  // Auto-dismiss post-ritual modal after 60 s with no response
+  // (must match RitualModal's postCountdown and overlay.html's startCountdown, both 60)
   useEffect(() => {
     if (!showRitualModal || ritualPhase !== 'post') return
     const timer = setTimeout(() => pomodoroControls.confirmPostRitual(null), 60000)
@@ -77,7 +126,9 @@ export default function App() {
         useStore.getState().setAppUsage(res.usage.focus, res.usage.break)
       }
     })
-    window.api?.system.getCurrentWallpaper().then((p) => {
+    // Safe capture: never returns the black focus PNG, and persists the original
+    // to disk so a force-kill mid-session can't permanently lose the real wallpaper.
+    window.api?.system.captureOriginalWallpaper().then((p) => {
       if (p) {
         originalWallpaperRef.current = p
         useStore.getState().setOriginalWallpaper(p)
@@ -108,6 +159,11 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
+  // Tell the main process whether the minimized overlay is allowed to appear
+  useEffect(() => {
+    window.api?.overlay?.setEnabled(overlayEnabled)
+  }, [overlayEnabled])
+
   // Keep overlay circle in sync whenever timer or eye status changes
   useEffect(() => {
     return useStore.subscribe(
@@ -131,7 +187,7 @@ export default function App() {
     }
     ;(async () => {
       if (!originalWallpaperRef.current) {
-        const orig = useStore.getState().originalWallpaper || await window.api?.system.getCurrentWallpaper()
+        const orig = useStore.getState().originalWallpaper || await window.api?.system.captureOriginalWallpaper()
         if (orig) {
           originalWallpaperRef.current = orig
           useStore.getState().setOriginalWallpaper(orig)
@@ -178,6 +234,26 @@ export default function App() {
 
   const eyeTrackerControls = { startCam, stopCam }
 
+  // Auto-start the eye tracker when a focus session begins, and stop it when the
+  // session ends — including breaks, long breaks, and idle. The tracker runs only
+  // during 'work' and 'paused' (paused is kept live because the tracker drives the
+  // away/phone auto-pause+resume — stopping it would break resume). Gated by the
+  // autoStartEyeTracking preference. We only auto-stop a camera we auto-started, so
+  // a manually-started camera is never shut off by a session ending.
+  const autoStartEyeTracking = useStore((s) => s.autoStartEyeTracking)
+  const camAutoStartedRef = useRef(false)
+  useEffect(() => {
+    if (!autoStartEyeTracking) return
+    const trackerShouldRun = pomodoroState === 'work' || pomodoroState === 'paused'
+    if (trackerShouldRun && !useStore.getState().eyeTrackingActive && !camAutoStartedRef.current) {
+      camAutoStartedRef.current = true
+      startCam()
+    } else if (!trackerShouldRun && camAutoStartedRef.current) {
+      camAutoStartedRef.current = false
+      stopCam()
+    }
+  }, [pomodoroState, autoStartEyeTracking])
+
   return (
     <div className="flex flex-col h-screen bg-surface-0 text-neutral-100 select-none overflow-hidden">
       {/* Persistent hidden video — must not use display:none (blocks canvas reads in Chromium) */}
@@ -193,11 +269,16 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
-          {page === 'focus'  && <FocusPage pomodoroControls={pomodoroControls} eyeTrackerControls={eyeTrackerControls} />}
-          {page === 'stats'  && <StatsPage />}
-          {page === 'system' && <SystemPage />}
-          {page === 'audios'    && <AudiosPage audioControls={audioControls} />}
-          {page === 'eyedebug' && <EyeDebugPage videoRef={videoRef} recalibrate={recalibrate} />}
+          {/* key={page} remounts on nav so the fade/slide-in replays each switch */}
+          <div key={page} className="animate-page">
+            {page === 'focus'  && <FocusPage pomodoroControls={pomodoroControls} eyeTrackerControls={eyeTrackerControls} />}
+            {page === 'stats'  && <StatsPage />}
+            {page === 'milestones' && <MilestonesPage />}
+            {page === 'system' && <SystemPage />}
+            {page === 'audios'    && <AudiosPage audioControls={audioControls} />}
+            {page === 'eyedebug' && <EyeDebugPage videoRef={videoRef} recalibrate={recalibrate} />}
+            {page === 'settings' && <SettingsPage />}
+          </div>
         </main>
       </div>
       {showRitualModal && (
@@ -206,6 +287,7 @@ export default function App() {
           onConfirmPost={pomodoroControls.confirmPostRitual}
         />
       )}
+      {showGoalToast && <GoalToast onClose={() => setShowGoalToast(false)} />}
     </div>
   )
 }

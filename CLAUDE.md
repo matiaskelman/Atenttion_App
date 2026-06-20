@@ -56,14 +56,13 @@ npm run dist:mac   # package as macOS DMG
 src/
 ├── main/
 │   ├── index.js          Main process entry — BrowserWindow, IPC wiring, custom protocol
-│   ├── systemInfo.js     CPU/memory stats, active window (PowerShell/osascript), wallpaper API
-│   └── documents.js      File/URL → Markdown conversion via markitdown or JS fallback
+│   └── systemInfo.js     CPU/memory stats, active window (PowerShell/osascript), wallpaper API
 ├── preload/
-│   └── index.js          Context bridge — exposes api.window, api.system, api.docs, api.data
+│   └── index.js          Context bridge — exposes api.window, api.system, api.data
 └── renderer/
     ├── index.html
     └── src/
-        ├── App.jsx                   5-page shell (Focus / Stats / System / Audios) — hooks hoisted here
+        ├── App.jsx                   Page shell (Focus/Stats/Milestones/System/Audio + Settings/EyeDebug) — hooks hoisted here; debounced prefs autosave; goal-reached toast; keyed page transitions
         ├── store/index.js            Zustand store — all app state
         ├── hooks/
         │   ├── usePomodoro.js        Timer logic, session completion, notifications
@@ -71,14 +70,18 @@ src/
         │   └── useAudio.js           Web Audio API — 7 synthesised ambient sounds
         └── components/
             ├── TitleBar.jsx          Custom frameless window chrome
-            ├── Sidebar.jsx           Nav + status dots (pomodoro, audio playing)
-            ├── Pomodoro.jsx          SVG ring timer + controls
-            ├── EyeTracker.jsx        Camera start/stop + status display
+            ├── Sidebar.jsx           Nav + status dots (pomodoro, audio playing); Settings pinned bottom
+            ├── Pomodoro.jsx          SVG ring timer + controls (reset is 2-step confirm mid-session)
+            ├── EyeTracker.jsx        Camera start/stop + status display (secondary indicators behind a Details expander)
+            ├── GoalToast.jsx         Trophy toast shown when daily focus goal is crossed
             └── pages/
                 ├── FocusPage.jsx     Main view: Pomodoro + EyeTracker + daily stats
-                ├── StatsPage.jsx     recharts: session bar chart + blink rate line chart
+                ├── StatsPage.jsx     recharts dashboard — Weekly Recap, Consistency heatmap, Optimal Duration, Focus Stamina, Deep Work, Focus Trend, Records, Apps-vs-Focus, Distractions, Best Hours, app activity, XLSX export
+                ├── MilestonesPage.jsx  "Goals" — 8 milestone tracks (progress bars + badge chips) + Achievements grid
+                ├── SettingsPage.jsx  Dedicated settings page (moved out of FocusPage); grouped cards; autosave indicator
                 ├── SystemPage.jsx    CPU/mem bars, active app, wallpaper changer
-                └── AudiosPage.jsx    7 ambient sound cards + volume slider (receives audioControls prop)
+                ├── AudiosPage.jsx    7 ambient sound cards + volume slider (receives audioControls prop)
+                └── EyeDebugPage.jsx  Live camera + tracker debug (dev surface — still in prod nav)
 
 scripts/
 ├── dev.js            Clears ELECTRON_RUN_AS_NODE then runs electron-vite dev
@@ -102,33 +105,34 @@ All communication goes through `contextBridge` → `window.api`:
 | `window:minimize/maximize/close` | renderer→main | Frameless window controls |
 | `system:getInfo` | renderer→main | CPU%, memory%, platform |
 | `system:getActiveApp` | renderer→main | Foreground process name |
+| `system:getIdleMs` | renderer→main | ms since last system-wide keyboard/mouse input (phone typing-veto) |
 | `system:setWallpaper` | renderer→main | Set desktop wallpaper path |
-| `docs:convertFile` | renderer→main | File → Markdown text |
-| `docs:convertUrl` | renderer→main | URL → text via fetch or markitdown |
 | `data:saveSession` | renderer→main | Append session to userData markdown |
 | `data:savePreferences` | renderer→main | Write preferences to userData markdown |
 | `data:loadPreferences` | renderer→main | Read preferences from userData on startup |
 
 ### State (Zustand store — `src/renderer/src/store/index.js`)
-Single flat store, no selectors needed at this scale. Key slices:
+Single flat store (uses `subscribeWithSelector` middleware). Key slices:
+- **Navigation:** `page` ('focus'|'stats'|'milestones'|'system'|'audios'|'settings'|'eyedebug'); `prefsSavedAt`/`markPrefsSaved` (autosave feedback)
 - **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`
 - **Eye tracking:** `eyeStatus` ('looking'|'away'|'blinking'|'unknown'), `blinkCount`, `blinkRate`
-- **Sessions:** `sessions[]`, `todayFocusSeconds`
+- **Sessions:** `sessions[]` (capped at last 1000, aligned with the on-disk cap), `todayFocusSeconds`, `streak`/`bestStreak`
 - **Audio:** `audioPlaying` (null | 'white'|'brown'|'pink'|'lofi'|'lofi2'|'classical'|'classical2')
 
 ### Eye Tracking Pipeline
 1. `getUserMedia({ video: true })` → hidden `<video>` element
 2. `setTimeout`-based loop at ~30fps calls `landmarker.detectForVideo(video, Date.now())` (synchronous)
 3. **Library / models:** `@mediapipe/tasks-vision` — `FaceLandmarker` with 478-point mesh. WASM runtime at `public/models/mediapipe/`, model file at `public/models/face_landmarker.task` (~2.3 MB float16).
-4. **Blink detection:** Eye Aspect Ratio (EAR) = `(|p2-p6| + |p3-p5|) / (2·|p1-p4|)` using 6 landmarks per eye (L: 362/385/387/263/373/380, R: 33/160/158/133/153/144). EAR < 0.20 for ≥1 frame = blink. Head yaw > 0.55 suppresses detection.
-5. **Attention:** No face detected for >3s (configurable) → `eyeStatus = 'away'` → auto-pause Pomodoro
+4. **Blink detection:** Eye Aspect Ratio (EAR) = `(|p2-p6| + |p3-p5|) / (2·|p1-p4|)` using 6 landmarks per eye (L: 362/385/387/263/373/380, R: 33/160/158/133/153/144). Adaptive threshold = restingEAR × `EAR_THRESHOLD_RATIO` (0.85, calibrated per-user); a blink needs ≥`BLINK_MIN_FRAMES` (2) sub-threshold frames AND is cross-checked against MediaPipe's trained `eyeBlink` blendshape. Head yaw > 0.55 suppresses detection. Blink **closure duration** + **PERCLOS** are tracked as a fatigue signal.
+5. **Attention:** No face detected past the away threshold (default 5s, configurable) → `eyeStatus = 'away'`; ordinary auto-pause waits an extra `AWAY_PAUSE_GRACE_MS` (4s) so brief think-glances don't kill the timer (phone-branded pause stays responsive).
 6. **Resume:** Face reappears → auto-resume if the pause was auto-triggered
 
 ### Blink Feedback & Focus Scoring
-**[`docs/blinksInfo.md`](docs/blinksInfo.md) is the single source of truth for all blink-based feedback.**
-It defines the six neurocognitive BPM brackets (A–F), their cognitive-state labels, feedback messages, UI colors, and the focus score assigned to each bracket. Two files are derived from it — update both whenever `blinksInfo.md` changes:
-- `src/renderer/src/components/EyeTracker.jsx` — `getBpmBracket()` function (labels, colors, messages)
-- `src/renderer/src/utils/focusScore.js` — `computeFocusScore()` function (BPM → score mapping)
+**[`docs/blinksInfo.md`](docs/blinksInfo.md) is the single source of truth for all blink-based feedback** (see also `docs/theory-technical.md`).
+The score is presented as an **estimate**, and is **personalized**: once a per-user blink baseline is learned (persisted in prefs), `computeRelativeRateScore` scores the current rate *relative to that baseline*. The absolute A–F BPM brackets are only the **fallback** for new users. The session score also applies a **fatigue factor** (PERCLOS + blink-closure duration). Earlier "dopamine/DMN" neuro claims were removed as unsupported — keep copy honest (relative-to-the-user, not asserted brain mechanisms). **Three** derived files — keep all in sync whenever `blinksInfo.md` changes:
+- `src/renderer/src/constants/blinksConfig.js` — `BPM_BRACKETS`, `REL_RATE_CURVE`, `getRelativeState`, `SCORE_CONFIG`
+- `src/renderer/src/utils/focusScore.js` — `computeFocusScore()` + `computeSessionScore()`
+- `src/renderer/src/components/EyeTracker.jsx` — live state label (`getRelativeState` / fallback bracket) + the "estimate" disclaimer
 
 ### Model Loading (Production)
 Models are at `src/renderer/public/models/` (gitignored, generated by `npm install`).
@@ -136,21 +140,13 @@ Models are at `src/renderer/public/models/` (gitignored, generated by `npm insta
 - **Production:** Custom `models://` Electron protocol handler serves them from `out/renderer/models/`
   - Registered in `src/main/index.js` via `protocol.registerSchemesAsPrivileged` (before `app.whenReady()`)
 
-### Document Ingestion
-1. `dialog.showOpenDialog` → file path(s)
-2. If `.txt`/`.md`: `fs.readFileSync`
-3. If Python + markitdown installed: `python -c "from markitdown import MarkItDown; ..."` subprocess
-4. If URL: `fetch()` → strip HTML tags fallback (or markitdown if available)
-5. Content stored in Zustand `documents[]`, displayed in DocumentsPage
-
----
 
 ## User Data Files
 Persisted to Electron's `app.getPath('userData')`:
-- `atenttion-sessions.md` — Append-only log of completed focus sessions (Markdown table)
-- `atenttion-preferences.md` — User preferences in YAML frontmatter + human-readable body
+- `atenttion-sessions.md` — Human-readable session log (Markdown table); `atenttion-sessions.json` — full-fidelity machine log (capped at last **1000** sessions; the store mirrors this cap so Stats/Milestones/export see the full history)
+- `atenttion-preferences.json` — User preferences (JSON; legacy `atenttion-preferences.md` YAML is auto-migrated on first load). `writePreferences` **merges** over the existing file, so a save that omits a field can't reset it (the personal `baselineBpm` relies on this). Build payloads via `buildPrefs(s, extra)` — see [`src/renderer/src/utils/prefs.js`](src/renderer/src/utils/prefs.js).
 
-On startup, preferences are loaded and applied to the Zustand store.
+On startup, preferences are loaded and applied to the Zustand store. **Preferences autosave:** changing any setting only mutates the store; App.jsx holds a debounced (`subscribeWithSelector` + `shallow`) subscription that persists the full `buildPrefs` payload ~600ms after any change (skipping the initial hydration). Session completion (`usePomodoro.js`) also persists prefs as a side effect. There is no manual Save button — SettingsPage shows a passive "Saved" indicator driven by `prefsSavedAt`.
 
 ---
 
@@ -164,8 +160,6 @@ On startup, preferences are loaded and applied to the Zustand store.
 
 4. **Wallpaper change on Windows** — Uses `SystemParametersInfo(SPI_SETDESKWALLPAPER, ...)` via PowerShell. Requires a full path to an image file. The app stores the original path on first load and can restore it.
 
-5. **markitdown requires Python** — The Documents page gracefully degrades: .txt/.md/.html work without Python. A "pip install" button is shown if Python is found but markitdown isn't.
-
 ---
 
 ## Preferences That Persist
@@ -173,5 +167,7 @@ On startup, preferences are loaded and applied to the Zustand store.
 - Short break duration (default 5 min)
 - Long break duration (default 15 min)
 - Eye tracking: away threshold, blink threshold
+- `baselineBpm` / `baselineBpmConfidence` — learned per-user engaged blink rate (drives personalized focus scoring)
+- Streak fields, daily goal, ritual/overlay/wallpaper/auto-start toggles
 
-These are written to `atenttion-preferences.md` on every change and read on startup.
+These are written to `atenttion-preferences.json` (merge-on-write) on every change and read on startup.

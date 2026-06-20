@@ -26,22 +26,18 @@ const api = {
     loadAppUsage: () => ipcRenderer.invoke('data:loadAppUsage'),
     exportCsv: (sessions) => ipcRenderer.invoke('data:exportCsv', sessions)
   },
-  docs: {
-    checkDeps: () => ipcRenderer.invoke('docs:checkDeps'),
-    installMarkitdown: () => ipcRenderer.invoke('docs:installMarkitdown'),
-    pickFile: () => ipcRenderer.invoke('docs:pickFile'),
-    convertFile: (path) => ipcRenderer.invoke('docs:convertFile', path),
-    convertUrl: (url) => ipcRenderer.invoke('docs:convertUrl', url)
-  },
   system: {
     getInfo: () => ipcRenderer.invoke('system:getInfo'),
     getActiveApp: () => ipcRenderer.invoke('system:getActiveApp'),
+    getIdleMs: () => ipcRenderer.invoke('system:getIdleMs'),
     getAppIcon: (name) => ipcRenderer.invoke('system:getAppIcon', name),
     getCurrentWallpaper: () => ipcRenderer.invoke('system:getCurrentWallpaper'),
+    captureOriginalWallpaper: () => ipcRenderer.invoke('system:captureOriginalWallpaper'),
     setWallpaper: (path) => ipcRenderer.invoke('system:setWallpaper', path),
     createFocusWallpaper: () => ipcRenderer.invoke('system:createFocusWallpaper')
   },
   overlay: {
+    setEnabled: (enabled) => ipcRenderer.send('overlay:set-enabled', enabled),
     update: (data) => ipcRenderer.send('overlay:update', data),
     showFeedback: (goal) => ipcRenderer.send('overlay:show-feedback', goal),
     dismissFeedback: () => ipcRenderer.send('overlay:dismiss-feedback'),

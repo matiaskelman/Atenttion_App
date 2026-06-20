@@ -70,6 +70,64 @@ function stopWindowsAppMonitor() {
   }
 }
 
+// System-wide input idle time (ms since last keyboard/mouse event), cross-platform.
+// A persistent child process emits idle ms every ~400ms; the handler extrapolates between samples.
+// Used to veto phone-detection false positives while the user is actively typing/mousing.
+let lastIdleMs = Infinity
+let lastIdleAt = Date.now()
+let idleProc = null
+
+function startIdleMonitor() {
+  if (idleProc) return
+  let cmd, args
+  if (process.platform === 'win32') {
+    // GetLastInputInfo P/Invoke loop — Idle() = (uint)TickCount - dwTime, printed every 400ms
+    const script = [
+      "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;",
+      "public class IdleHelper{",
+      "[StructLayout(LayoutKind.Sequential)]public struct LASTINPUTINFO{public uint cbSize;public uint dwTime;}",
+      "[DllImport(\"user32.dll\")]public static extern bool GetLastInputInfo(ref LASTINPUTINFO p);",
+      "public static uint Idle(){LASTINPUTINFO l=new LASTINPUTINFO();l.cbSize=8;GetLastInputInfo(ref l);return (uint)Environment.TickCount - l.dwTime;}}';",
+      "while($true){[IdleHelper]::Idle();[System.Threading.Thread]::Sleep(400)}"
+    ].join('')
+    cmd = 'powershell'
+    args = ['-NoProfile', '-NonInteractive', '-Command', script]
+  } else if (process.platform === 'darwin') {
+    // HIDIdleTime (nanoseconds) from IOHIDSystem — system-wide HID idle, no special permission needed
+    const script = "while true; do ioreg -c IOHIDSystem | awk '/HIDIdleTime/{print int($NF/1000000); exit}'; sleep 0.4; done"
+    cmd = 'sh'
+    args = ['-c', script]
+  } else {
+    return
+  }
+
+  idleProc = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+
+  let buf = ''
+  idleProc.stdout.on('data', (data) => {
+    buf += data.toString()
+    const lines = buf.split('\n')
+    buf = lines.pop()
+    for (const line of lines) {
+      const n = parseInt(line.trim(), 10)
+      if (!isNaN(n)) { lastIdleMs = n; lastIdleAt = Date.now() }
+    }
+  })
+
+  idleProc.on('close', () => {
+    idleProc = null
+    if (!appIsQuitting) setTimeout(startIdleMonitor, 3000)
+  })
+}
+
+function stopIdleMonitor() {
+  appIsQuitting = true
+  if (idleProc) {
+    idleProc.kill()
+    idleProc = null
+  }
+}
+
 function getCPUUsage() {
   const cpus = os.cpus()
   let idle = 0, total = 0
@@ -169,9 +227,100 @@ function makeBlackPng() {
   ])
 }
 
+// ─── Focus wallpaper crash-safety ──────────────────────────────────────────
+// The focus feature swaps the desktop to a generated black PNG during work and
+// restores the user's original afterwards. A force-kill mid-session used to leave
+// the desktop black permanently — and on next launch the app would read the black
+// PNG back from the registry and save *that* as the new "original", destroying the
+// real wallpaper. To prevent that we (1) persist the captured original to disk,
+// (2) never capture the black PNG itself as the original, and (3) restore the
+// original on next startup or before quit if the black PNG is still active.
+
+let focusWallpaperActive = false
+
+function focusWallpaperPath() {
+  return path.join(app.getPath('userData'), 'focus-wallpaper.png')
+}
+
+function originalWallpaperStorePath() {
+  return path.join(app.getPath('userData'), 'original-wallpaper.json')
+}
+
+function isFocusWallpaper(p) {
+  if (!p) return false
+  const norm = (s) => path.normalize(s).replace(/[\\/]+$/, '').toLowerCase()
+  return norm(p) === norm(focusWallpaperPath())
+}
+
+function readSavedOriginalWallpaper() {
+  try {
+    return JSON.parse(fs.readFileSync(originalWallpaperStorePath(), 'utf-8')).path || null
+  } catch {
+    return null
+  }
+}
+
+function writeSavedOriginalWallpaper(p) {
+  try {
+    fs.writeFileSync(originalWallpaperStorePath(), JSON.stringify({ path: p }), 'utf-8')
+  } catch {}
+}
+
+function applyWallpaper(imagePath) {
+  if (process.platform === 'win32') {
+    const safePath = imagePath.replace(/\\/g, '\\\\').replace(/'/g, "''")
+    execSync(
+      `powershell -NoProfile -NonInteractive -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class W{[DllImport(\\"user32.dll\\",CharSet=CharSet.Auto)]public static extern int SystemParametersInfo(int a,int b,string c,int d);}';[W]::SystemParametersInfo(20,0,'${safePath}',3)"`,
+      { timeout: 5000, windowsHide: true }
+    )
+  } else if (process.platform === 'darwin') {
+    const safePath = imagePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    execSync(
+      `osascript -e "tell application \\"Finder\\" to set desktop picture to POSIX file \\"${safePath}\\""`,
+      { timeout: 5000 }
+    )
+  }
+}
+
+// If the desktop is still our black focus PNG (e.g. the app was force-killed
+// mid-session) restore the persisted original. Safe to call repeatedly.
+function restoreOriginalIfFocusActive() {
+  try {
+    if (!isFocusWallpaper(getCurrentWallpaper())) return
+    const original = readSavedOriginalWallpaper()
+    if (original && !isFocusWallpaper(original)) {
+      applyWallpaper(original)
+      focusWallpaperActive = false
+    }
+  } catch {}
+}
+
 export function setupSystemIPC() {
   startWindowsAppMonitor()
+  startIdleMonitor()
   app.on('before-quit', stopWindowsAppMonitor)
+  app.on('before-quit', stopIdleMonitor)
+
+  // Recover from a prior crash that left the desktop on the black focus PNG.
+  // Deferred so the synchronous wallpaper query never delays first paint.
+  setTimeout(restoreOriginalIfFocusActive, 1500)
+
+  // Backstop for a graceful quit if the renderer's unmount restore didn't run.
+  // Cheap: only does work when the focus wallpaper is still active this session.
+  app.on('before-quit', () => {
+    if (!focusWallpaperActive) return
+    const original = readSavedOriginalWallpaper()
+    if (original && !isFocusWallpaper(original)) {
+      try { applyWallpaper(original); focusWallpaperActive = false } catch {}
+    }
+  })
+
+  // ms since last system-wide keyboard/mouse input (extrapolated between samples).
+  // Returns a large finite value when the source is unavailable → callers treat it as "idle" (no veto).
+  ipcMain.handle('system:getIdleMs', async () => {
+    const v = lastIdleMs + (Date.now() - lastIdleAt)
+    return Number.isFinite(v) ? v : 1e9
+  })
 
   ipcMain.handle('system:getInfo', async () => {
     const cpus = os.cpus()
@@ -205,6 +354,18 @@ export function setupSystemIPC() {
 
   ipcMain.handle('system:getCurrentWallpaper', async () => getCurrentWallpaper())
 
+  // Safely capture the user's real wallpaper as the "original" to restore later.
+  // Never returns the focus PNG (which would clobber the real original after a
+  // crash); persists the captured path to disk so it survives restarts.
+  ipcMain.handle('system:captureOriginalWallpaper', async () => {
+    const current = getCurrentWallpaper()
+    if (current && !isFocusWallpaper(current)) {
+      writeSavedOriginalWallpaper(current)
+      return current
+    }
+    return readSavedOriginalWallpaper()
+  })
+
   ipcMain.handle('system:createFocusWallpaper', async () => {
     try {
       const filePath = path.join(app.getPath('userData'), 'focus-wallpaper.png')
@@ -217,19 +378,10 @@ export function setupSystemIPC() {
 
   ipcMain.handle('system:setWallpaper', async (_, imagePath) => {
     try {
-      if (process.platform === 'win32') {
-        const safePath = imagePath.replace(/\\/g, '\\\\').replace(/'/g, "''")
-        execSync(
-          `powershell -NoProfile -NonInteractive -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class W{[DllImport(\\"user32.dll\\",CharSet=CharSet.Auto)]public static extern int SystemParametersInfo(int a,int b,string c,int d);}';[W]::SystemParametersInfo(20,0,'${safePath}',3)"`,
-          { timeout: 5000, windowsHide: true }
-        )
-      } else if (process.platform === 'darwin') {
-        const safePath = imagePath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        execSync(
-          `osascript -e "tell application \\"Finder\\" to set desktop picture to POSIX file \\"${safePath}\\""`,
-          { timeout: 5000 }
-        )
-      }
+      applyWallpaper(imagePath)
+      // Track whether the black focus PNG is the live desktop so the before-quit
+      // backstop knows whether it needs to restore the original.
+      focusWallpaperActive = isFocusWallpaper(imagePath)
       return { success: true }
     } catch (e) {
       return { success: false, error: e.message }

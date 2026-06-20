@@ -34,14 +34,18 @@ function filterByRange(sessions, range) {
   return sessions.filter((s) => new Date(s.date).toLocaleDateString('en-CA') >= startStr)
 }
 
-function FocusBadge({ score }) {
+function FocusBadge({ score, confidence }) {
+  const low = confidence === 'low'
   const cls = score == null ? 'bg-surface-2 text-neutral-600'
     : score >= 80 ? 'bg-emerald-500/15 text-emerald-400'
     : score >= 50 ? 'bg-amber-500/15 text-amber-400'
     : 'bg-red-500/15 text-red-400'
   return (
-    <span className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${cls}`}>
-      {score != null ? score : '—'}
+    <span
+      className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${cls} ${low ? 'opacity-50' : ''}`}
+      title={score == null ? 'Not enough data to score this session' : low ? 'Low confidence — short or sparse session' : undefined}
+    >
+      {score == null ? '—' : low ? `~${score}` : score}
     </span>
   )
 }
@@ -166,7 +170,7 @@ export default function SessionsTable({ sessions }) {
                   <span className="text-neutral-600 text-[10px]">{timeStr}</span>
                 </span>
                 <span>{formatDuration(s.duration)}</span>
-                <FocusBadge score={s.focusScore} />
+                <FocusBadge score={s.focusScore} confidence={s.scoreConfidence} />
                 <span className="flex items-center gap-1">
                   {(s.phonePickups ?? 0) > 0 ? (
                     <>

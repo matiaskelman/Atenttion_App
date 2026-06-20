@@ -1,6 +1,9 @@
 ATENTTION APP — FILE REFERENCE
 ================================
-Every source file explained. Updated: 2026-05-22.
+Every source file explained. Updated: 2026-06-20.
+NOTE: some older entries below still mention face-api / the removed Documents
+feature; eye tracking is now MediaPipe (see CLAUDE.md). Entries touched in the
+2026-06 UX/stats pass are current.
 
 ════════════════════════════════════════
 ENTRY POINTS & CONFIG
@@ -16,11 +19,10 @@ src/main/index.js
 
 src/preload/index.js
   The security bridge between the Electron main process and the React renderer.
-  Exposes a single `window.api` object via contextBridge with four namespaces:
+  Exposes a single `window.api` object via contextBridge with these namespaces:
     - api.window   → minimize, maximize, close, isMaximized, onMaximized
     - api.data     → saveSession, savePreferences, loadPreferences, getSessionsPath,
                      getPrefsPath, getSessionCount
-    - api.docs     → checkDeps, installMarkitdown, pickFile, convertFile, convertUrl
     - api.system   → getInfo, getActiveApp, getCurrentWallpaper, setWallpaper
   All calls go through ipcRenderer.invoke (two-way) or ipcRenderer.send (fire-and-forget).
 
@@ -35,8 +37,17 @@ src/renderer/src/main.jsx
 
 src/renderer/src/App.jsx
   Top-level React shell. Reads the `page` state from Zustand and renders the
-  correct page component (FocusPage / StatsPage / SystemPage / DocumentsPage)
-  inside a layout of TitleBar + Sidebar + main content area.
+  correct page component (FocusPage / StatsPage / MilestonesPage / SystemPage /
+  AudiosPage / SettingsPage / EyeDebugPage) inside a layout of TitleBar + Sidebar
+  + main content area. Page content is wrapped in <div key={page} className="animate-page">
+  so each nav switch replays a fade/slide-in.
+  Also owns three cross-page concerns:
+    - Preferences autosave: a debounced useStore.subscribe (subscribeWithSelector
+      + shallow) persists buildPrefs(...) ~600ms after any pref change; skips the
+      first emission (startup hydration) and calls markPrefsSaved() after writing.
+    - Goal-reached toast: a subscription detects todayFocusSeconds crossing
+      dailyGoalSeconds (once per crossing, re-arms on day rollover) → <GoalToast/>.
+    - Eye-tracker camera lifecycle + focus-wallpaper apply/restore.
 
 src/renderer/src/styles/index.css
   Global Tailwind CSS + custom component classes. Defines:
@@ -66,25 +77,18 @@ src/main/systemInfo.js
 
 src/main/persistence.js
   Reads and writes user data to Electron's userData directory
-  (%APPDATA%\atenttion-app\ on Windows). Two files:
-    atenttion-sessions.md   — Append-only Markdown table of completed sessions.
-                              Columns: Date, Time, Duration, Blinks, BPM, Away.
-    atenttion-preferences.md — YAML frontmatter + human-readable table.
-                              Read on startup; written whenever user saves settings.
-  IPC handlers: data:saveSession, data:savePreferences, data:loadPreferences,
-  data:getSessionsPath, data:getPrefsPath, data:getSessionCount.
-  Preferences are parsed from YAML frontmatter (custom parser — no yaml library).
-
-src/main/documents.js
-  File and URL → text conversion pipeline for the Documents page.
-  Strategy (in priority order):
-    1. .txt / .md files → fs.readFileSync directly
-    2. markitdown (Python subprocess) → handles PDF, DOCX, PPTX, XLSX, etc.
-    3. .html files → simple regex tag-stripping fallback
-    4. URLs → fetch() + HTML tag stripping (or markitdown if available)
-  IPC handlers: docs:checkDeps (Python version + markitdown installed?),
-  docs:installMarkitdown (runs pip install markitdown), docs:pickFile (dialog),
-  docs:convertFile, docs:convertUrl.
+  (%APPDATA%\atenttion-app\ on Windows). Files:
+    atenttion-sessions.md   — Append-only human-readable Markdown table (uncapped).
+    atenttion-sessions.json — Full-fidelity machine log; capped at the last 1000
+                              (appendSessionJson slice(-1000)). The renderer store
+                              mirrors this 1000 cap (sessionSlice).
+    atenttion-preferences.json — JSON prefs; writePreferences MERGES over the file
+                              so a partial save can't reset omitted fields. Legacy
+                              atenttion-preferences.md (YAML) auto-migrated on first load.
+    atenttion-app-usage.json — today's per-app focus/break seconds.
+  IPC: data:saveSession, data:loadSessions, data:save/loadAppUsage,
+  data:savePreferences, data:loadPreferences, data:getSessionsPath,
+  data:getPrefsPath, data:getSessionCount, data:exportCsv (XLSX via exceljs).
 
 ════════════════════════════════════════
 ZUSTAND STORE
@@ -95,7 +99,11 @@ src/renderer/src/store/index.js
   Key slices:
 
   Navigation:
-    page: 'focus' | 'stats' | 'system' | 'docs'
+    page: 'focus' | 'stats' | 'milestones' | 'system' | 'audios' | 'settings' | 'eyedebug'
+    prefsSavedAt / markPrefsSaved() — timestamp set after each autosave write;
+      SettingsPage flashes a passive "Saved" indicator off it.
+    (store uses the subscribeWithSelector middleware — App.jsx subscribes with
+     selector+shallow for prefs autosave and the goal-toast crossing detector.)
 
   Preferences (persisted):
     workDuration, shortBreakDuration, longBreakDuration (in seconds)
@@ -118,9 +126,12 @@ src/renderer/src/store/index.js
     modelLoaded, modelLoading — face-api model load state
 
   Session history:
-    sessions[] — last 100 sessions, each: { date, duration, blinkCount, blinkRate,
-                 blinkVariability, focusScore, awaySeconds }
-    todayFocusSeconds — running total for today
+    sessions[] — last 1000 sessions (mirrors the on-disk cap so Stats/Milestones/
+                 export see full history), each: { date, duration, blinkCount,
+                 blinkRate, blinkVariability, focusScore, scoreConfidence,
+                 awaySeconds, phonePickups, appUsage{}, and (if ritual) outcomeRating,
+                 goal, moodBefore }
+    todayFocusSeconds — running total for today; streak / bestStreak / lastSessionDate
 
   Documents:
     documents[] — { id, name, path, ext, content, addedAt }
@@ -198,11 +209,12 @@ src/renderer/src/components/TitleBar.jsx
   the maximize icon.
 
 src/renderer/src/components/Sidebar.jsx
-  72px-wide vertical nav bar. Four nav items (Focus/Stats/System/Docs) each
-  rendered as a <button data-page={id}>. The data-page attribute is used by
-  the Playwright driver for reliable navigation (avoids lucide icon textContent
-  matching issues). Shows a color dot on Focus button when Pomodoro is running,
-  and an eye-status dot at the bottom (green/red pulsing/amber/grey).
+  72px-wide vertical nav bar. Top nav items (Focus / Stats / Goals[milestones] /
+  System / Audio / Eye Debug) each rendered as a <button data-page={id}>. Settings
+  is pinned to the bottom group (above the eye-status dot). The data-page attribute
+  is used by the Playwright driver for reliable navigation. Shows a color dot on
+  the Focus button when Pomodoro is running, an audio dot on Audio, and an
+  eye-status dot at the bottom (green/red pulsing/amber/grey).
 
 src/renderer/src/components/Pomodoro.jsx
   SVG ring timer. Calculates progress as (1 - timeLeft/totalDuration) and
@@ -220,11 +232,12 @@ src/renderer/src/components/EyeTracker.jsx
   - Toggle button: starts getUserMedia stream + face-api loop, or stops both
   blinkRhythm(cv) and blinkRateStatus(bpm) are pure helper functions for display logic.
 
-src/renderer/src/components/Settings.jsx
-  Collapsible settings panel on FocusPage. Sliders for work/short-break/long-break
-  durations (1–60 min) and eye-away threshold (1–10s). Sliders are disabled while
-  timer is running. Save button writes to atenttion-preferences.md via IPC.
-  Shows data file paths once panel is opened.
+  (Settings.jsx was removed in the 2026-06 UX pass — settings now live on their own
+   page; see pages/SettingsPage.jsx below.)
+
+src/renderer/src/components/GoalToast.jsx
+  Small fixed bottom-right trophy toast shown when the daily focus goal is crossed.
+  Auto-dismisses after 6s (animate-toast keyframe). Mounted/unmounted by App.jsx.
 
 ════════════════════════════════════════
 PAGES
@@ -236,14 +249,41 @@ src/renderer/src/components/pages/FocusPage.jsx
   Main layout: Pomodoro ring (left) + EyeTracker + Settings panel (right column).
 
 src/renderer/src/components/pages/StatsPage.jsx
-  Session history and charts. Uses recharts.
-    - 4 summary cards: today's focus, sessions, avg BPM, total sessions
-    - Bar chart: focus duration per session (last 10)
-    - Line chart: BPM trend per session (last 10)
-    - Session table (last 8): Time, Duration, BPM, Rhythm (🟢/🟡/🔴),
-      Focus score (color-coded), Away time
-  Focus score and blink variability are displayed from session data saved at
-  session completion time (not live values).
+  Session history + analytics dashboard (recharts). All cards are in-file components
+  and pure derivations of the sessions[] array. Rebuilt/expanded in the 2026-06 pass:
+    - 4 summary cards (total focus, total sessions, avg score, streak)
+    - WeeklyRecapCard — last-7-days vs prior-7-days: Sessions / Focus / Avg score /
+      Best score, each with a ▲/▼ delta
+    - SessionsTable — expandable rows (see feedback_statspage memory)
+    - WeekCard + ConsistencyCard side-by-side — daily bars + a 13-week GitHub-style
+      heatmap (cell shade = day focus ÷ dailyGoal; emerald ring on goal-hit days)
+    - OptimalDurationCard — avg focus by 10-min duration bin (optimum needs ≥2 sessions)
+    - StaminaCard — avg focus by session position-in-day (1st/2nd/3rd…)
+    - DeepWorkCard — % of focus time at high/med/low score + week-over-week trend
+    - FocusTrendCard — 7-day rolling avg focus over the last 8 weeks (line)
+    - DistractionsCard, BestFocusHoursCard, RecordsCard, AppsVsFocusCard
+    - App Activity (focus vs break) + XLSX export
+  Most cards self-gate with a "not enough data yet" state. Scores/variability come
+  from session data saved at completion time (not live values).
+
+src/renderer/src/components/pages/MilestonesPage.jsx
+  "Goals" page. 8 MilestoneTrack cards (each: current value, progress bar to the
+  next threshold, badge chips): Focus Hours, Sessions Completed, Active Days,
+  Best Streak, Goal-Hit Streak (consecutive days reaching dailyGoal), Distraction-
+  Free Sessions (0 pickups + 0 away), Flow States (outcomeRating===3), Deep Work
+  Hours (focusScore≥80). Below them, AchievementsCard — one-time badges computed
+  from sessions (Marathon, Early Bird, Night Owl, Deep Diver, Perfect Day,
+  Comeback, Weekend Warrior). NOTE: goal-hit streak / Perfect Day apply the
+  CURRENT dailyGoalSeconds retroactively (per-day goal isn't stored historically).
+
+src/renderer/src/components/pages/SettingsPage.jsx
+  Dedicated settings page (replaces the old Settings.jsx card on FocusPage).
+  Grouped cards in a responsive grid: Timer (work/short/long durations; a 30s test
+  shortcut on work + on daily goal), Goals & Attention (daily goal, look-away pause),
+  Alerts, Session Ritual, Focus Mode, Minimized Overlay, Eye Tracking, Data Files.
+  Duration sliders are disabled (with tooltip) while the timer runs. No Save button —
+  prefs autosave (App.jsx); a passive "Saved" indicator in the header reacts to
+  prefsSavedAt. Reuses the buildPrefs completeness contract.
 
 src/renderer/src/components/pages/SystemPage.jsx
   System monitoring dashboard. Polls system info every 5s via setInterval.
@@ -253,15 +293,6 @@ src/renderer/src/components/pages/SystemPage.jsx
     - Active application: foreground process name + recent history chips
     - Wallpaper changer: text input for image path + Set/Restore buttons
       (saves original wallpaper on mount so it can be restored)
-
-src/renderer/src/components/pages/DocumentsPage.jsx
-  Document ingestion UI. Checks Python/markitdown deps on mount.
-  Shows pip install button if Python found but markitdown missing.
-  Browse Files → system file dialog → converts each to text → addDocument().
-  Add URL → fetch/markitdown conversion → addDocument().
-  Documents stored in Zustand only (in-memory, not persisted across restarts).
-  DocCard component: file name, timestamp, char count, expand/collapse preview,
-  delete button.
 
 ════════════════════════════════════════
 SCRIPTS

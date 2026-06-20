@@ -3,7 +3,6 @@ import { app, BrowserWindow, ipcMain, shell, protocol, session, screen } from 'e
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import { setupSystemIPC } from './systemInfo'
-import { setupDocumentsIPC } from './documents'
 import { setupPersistenceIPC } from './persistence'
 
 // Must register before app.whenReady()
@@ -90,10 +89,19 @@ function createWindow() {
     overlayWindow.loadFile(join(__dirname, '../renderer/overlay.html'))
   }
 
+  // User setting — when false the minimized overlay never appears.
+  let overlayEnabled = true
+  ipcMain.on('overlay:set-enabled', (_, enabled) => {
+    overlayEnabled = !!enabled
+    if (!overlayEnabled && !overlayWindow.isDestroyed() && overlayWindow.isVisible()) {
+      overlayWindow.hide()
+    }
+  })
+
   // showInactive keeps the overlay visible without stealing focus from the user's current window.
   // If we used show() here, GetForegroundWindow() would return the overlay's own process
   // and the app tracker would always record "electron" instead of Chrome/Spotify/etc.
-  mainWindow.on('blur',  () => overlayWindow.showInactive())
+  mainWindow.on('blur',  () => { if (overlayEnabled) overlayWindow.showInactive() })
   mainWindow.on('focus', () => overlayWindow.hide())
   mainWindow.on('close', () => { if (!overlayWindow.isDestroyed()) overlayWindow.close() })
 
@@ -177,7 +185,6 @@ function createWindow() {
   })
 
   setupSystemIPC()
-  setupDocumentsIPC()
   setupPersistenceIPC()
 }
 

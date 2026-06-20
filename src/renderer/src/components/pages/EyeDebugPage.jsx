@@ -3,7 +3,8 @@ import {
   LineChart, Line, ReferenceLine, XAxis, YAxis, ResponsiveContainer, Tooltip
 } from 'recharts'
 import { useStore } from '../../store'
-import { registerDebugCanvas, earChartBufferRef } from '../../hooks/useEyeTracker'
+import { registerDebugCanvas, earChartBufferRef, EAR_THRESHOLD_RATIO, TYPING_VETO_MS } from '../../hooks/useEyeTracker'
+import { SCORE_CONFIG } from '../../constants/blinksConfig'
 
 const MAX_HISTORY = 300   // ~10 s at 30 fps
 const RENDER_INTERVAL = 100  // ms — throttle chart re-renders to ~10 fps
@@ -23,13 +24,13 @@ const concepts = [
   },
   {
     title: 'Adaptive Calibration',
-    body: 'A fixed threshold fails for many people — someone with naturally narrower eyes might have a resting EAR of 0.24, making 0.20 nearly useless for them. During the first 10 seconds, the app collects your open-eye EAR readings. The threshold is set to 70% of the 75th percentile of those readings (not the mean), which represents your "comfortably open" eye regardless of whether you have wide or narrow eyes.',
-    code: 'Threshold = 75th_percentile(open-eye EAR) × 0.75\n\nCalibration window: first 10 seconds\nMinimum samples needed: 30\nSample filter: EAR > 0.15 (covers all eye sizes)\nFallback if not enough data: 0.20 (static default)'
+    body: 'A fixed threshold fails for many people — someone with naturally narrower eyes might have a resting EAR of 0.24, making 0.20 nearly useless for them. During the first 10 seconds, the app collects your open-eye EAR readings. The threshold is set to 85% of the 75th percentile of those readings (not the mean), which represents your "comfortably open" eye regardless of whether you have wide or narrow eyes. The line sits close to your resting EAR so light, partial blinks (common at a screen) still register; the blendshape cross-check rejects the extra noise.',
+    code: 'Threshold = 75th_percentile(open-eye EAR) × 0.85\n\nCalibration window: first 10 seconds\nMinimum samples needed: 30\nSample filter: EAR > 0.15 (covers all eye sizes)\nFallback if not enough data: 0.20 (static default)'
   },
   {
     title: 'Blink Detection Window (MIN / MAX Frames)',
-    body: 'Not every EAR dip is a real blink. A single frame below threshold (~33 ms) is almost certainly noise. A real voluntary blink lasts 150–400 ms. To filter noise, a minimum of 3 consecutive frames below threshold (~100 ms) are required before a blink is registered. Conversely, if your eyes stay closed for more than 15 frames (~500 ms), that is a deliberate squint or intentional closure — it is excluded. A small dead zone (hysteresis) above the threshold prevents the detector from flickering between open/closed on the same frame.',
-    code: 'BLINK_MIN_FRAMES = 3   (~100 ms at 30 fps)\nBLINK_MAX_FRAMES = 15  (~500 ms at 30 fps)\nEAR_HYSTERESIS   = 0.02  (dead zone above threshold)\n\nBlink is counted on the RISING EDGE (when eye reopens)\nso the full closure duration is known before deciding.\nEAR buffer is cleared after each blink so rapid\nconsecutive blinks each get a fresh baseline.'
+    body: 'Not every EAR dip is a real blink. A single frame below threshold (~33 ms) is almost certainly noise. To filter it, at least 2 consecutive frames below threshold (~66 ms) are required before a blink is registered. If your eyes stay closed for more than 15 frames (~500 ms), that is a deliberate squint or closure — excluded. A small dead zone (hysteresis) above the threshold prevents flickering. As a second check, MediaPipe also outputs a trained eyeBlink value (0=open, 1=closed); a blink only counts if that value actually peaked during the closure, which rejects jitter and brief occlusions that fool the geometric EAR.',
+    code: 'BLINK_MIN_FRAMES = 2   (~66 ms at 30 fps)\nBLINK_MAX_FRAMES = 15  (~500 ms at 30 fps)\nEAR_HYSTERESIS   = 0.02  (dead zone above threshold)\nBLEND_BLINK_MIN  = 0.15  (trained blendshape must peak above this)\n\nBlink is counted on the RISING EDGE (when eye reopens)\nso the full closure DURATION is known before deciding\n(that duration also feeds the fatigue metric below).'
   },
   {
     title: 'Head Pose: Yaw & Pitch',
@@ -38,23 +39,33 @@ const concepts = [
   },
   {
     title: 'Jaw Open / Talking Detection',
-    body: 'When your mouth is open (talking, yawning, laughing), jaw movement can slightly tension the muscles around the eyes, causing small EAR dips that register as false blinks. The app measures how far apart your upper and lower inner lips are, normalised by eye span. If that ratio exceeds 0.15, blink detection is paused — the same 3-frame hysteresis applies so brief mouth movements do not interrupt. The Jaw stat box turns orange when this guard is active.',
-    code: 'jawOpenRatio = |upperLipY − lowerLipY| / eyeSpan\n\nLandmarks: lm[13] = upper inner lip\n           lm[14] = lower inner lip\n\nTALK_THRESHOLD = 0.15\nSuppression requires POSE_GUARD_FRAMES = 3 sustained frames'
+    body: 'When your mouth is open (talking, yawning, laughing), jaw movement can slightly tension the muscles around the eyes, causing small EAR dips that register as false blinks. The app measures how far apart your upper and lower inner lips are, normalised by eye span. If that ratio exceeds 0.22, blink detection is paused — the same 3-frame hysteresis applies so brief mouth movements do not interrupt. The Jaw stat box turns orange when this guard is active.',
+    code: 'jawOpenRatio = |upperLipY − lowerLipY| / eyeSpan\n\nLandmarks: lm[13] = upper inner lip\n           lm[14] = lower inner lip\n\nTALK_THRESHOLD = 0.22\nSuppression requires POSE_GUARD_FRAMES = 3 sustained frames'
   },
   {
-    title: 'Blink Rate (BPM) & Focus Brackets',
-    body: 'BPM = blinks per minute, calculated over a rolling 60-second window. Normal spontaneous blink rate at a computer screen is 12–25 BPM. Below 12 suggests deep focus or dry-eye risk (the brain suppresses blinking to keep visual input uninterrupted). Above 25 suggests fatigue, cognitive friction, or mind-wandering. Six neurocognitive brackets (A–F) map BPM ranges to specific cognitive states and contribute to the focus score.',
-    code: 'A  <  6 BPM  — Hyper-focus / dry-eye risk   (violet)\nB   6–11 BPM  — High executive function        (cyan)\nC  12–25 BPM  — Optimal baseline (target)      (emerald)\nD  26–45 BPM  — Task friction / early fatigue  (amber)\nE  46–65 BPM  — Attentional drift              (orange)\nF  > 65 BPM  — Mind wandering / zoning out    (red)\n\n60-second rolling window, clamped to [20s, 60s] until\nenough data accumulates to avoid early spikes.'
+    title: 'Blink Rate (BPM) — personalized, not absolute',
+    body: 'BPM = blinks per minute over a rolling 60-second window. Honest caveat: blink rate is only loosely tied to focus and varies hugely between people and conditions (dry eyes, contacts, lighting, screen distance, caffeine, time of day). What IS reliable is the relationship WITHIN one person: blinking drops when you read/focus intently and tends to rise when you tire or drift. So once the app has watched a few of your sessions it learns YOUR own engaged baseline and scores how far the current rate sits from it — rather than asserting a population number. Until that baseline is learned, it falls back to the fixed A–F brackets below as a rough first guess. Treat the result as an estimate, not a measurement.',
+    code: 'Personalized (after a few sessions):\n  score from ratio  r = currentBPM / yourBaseline\n  r ~ 1   -> in your zone (best)\n  r << 1  -> quiet eyes (deep focus, slight strain)\n  r >> 1  -> above your usual (tiring / drifting)\n\nFallback brackets (new users, rough guide only):\n  < 6, 6-11, 12-25, 26-45, 46-65, > 65 BPM\n\n60s rolling window, clamped to [20s, 60s]; the rate now\nrecomputes ~1x/s so it DECAYS when you stop blinking.'
   },
   {
     title: 'Blink Rhythm (Coefficient of Variation)',
-    body: 'Even at the same BPM, the pattern of your blinks matters. CV (Coefficient of Variation) measures how consistent the time gaps between blinks are. A focused person blinks at a steady, almost metronomic rhythm (low CV). A distracted or fatigued person has erratic, clustered blinks with long irregular gaps (high CV). CV is computed from the last 20 inter-blink intervals.',
-    code: 'CV = std_dev(inter-blink intervals) / mean(inter-blink intervals)\n\nCV < 0.40  → Regular   (consistent rhythm, focused)\n0.40–0.69  → Variable  (some attentional fluctuation)\nCV ≥ 0.70  → Irregular (erratic, distracted/fatigued)\n\nNeeds at least 3 blinks to start computing.'
+    body: 'Even at the same BPM, the pattern of your blinks matters. CV (Coefficient of Variation) measures how consistent the time gaps between blinks are. A steady, almost metronomic rhythm gives a low CV; erratic, clustered blinks give a high CV. CV is computed from the last 20 inter-blink intervals — but it now stays hidden until at least 6 intervals exist, because a CV from 2–3 samples is statistically meaningless and it carries 45% of the live score.',
+    code: 'CV = std_dev(inter-blink intervals) / mean(inter-blink intervals)\n\nCV < 0.40  → Regular   (consistent rhythm)\n0.40–0.69  → Variable  (some fluctuation)\nCV ≥ 0.70  → Irregular (erratic — distracted/fatigued)\n\nNeeds ≥ 6 intervals before it influences the score.'
   },
   {
     title: 'Focus Score Formula',
-    body: 'The focus score combines BPM bracket and blink rhythm into a single 0–100 number. BPM contributes 55% of the score (what you are cognitively doing matters most) and rhythm contributes 45% (how consistently you are doing it). A score of 100 requires both optimal BPM (12–25 BPM, Bracket C) and perfectly regular rhythm. Neither alone is sufficient — you can be in the right BPM bracket but still score poorly if your rhythm is chaotic.',
-    code: 'focusScore = rateScore × 0.55 + rhythmScore × 0.45\n\nrateScore   → from BPM bracket table (0–100)\nrhythmScore → from CV: 100 at CV=0, 0 at CV≥0.70\n\nScore is null until the first blink is detected.\nUpdated on every blink (rising edge).'
+    body: 'Two layers. The INSTANTANEOUS estimate (the live number) combines a RATE score 55% and rhythm 45%. The rate score is personalized once your baseline is learned (how far your current BPM sits from your own norm); before that it uses the fallback brackets. The SESSION score (saved and shown in Stats) is the time-weighted AVERAGE of that estimate over your on-screen time, scaled down by behavioural penalties — away time (super-linear), phone pickups (capped), a rising-trend penalty — and now a FATIGUE penalty from PERCLOS + long blink closures (the validated drowsiness markers). Too little data shows "—" or a faded "~" low-confidence score.',
+    code: 'live = rateScore × 0.55 + rhythmScore × 0.45\n  rateScore   → vs your baseline (or brackets, new users)\n  rhythmScore → from CV (only once ≥6 intervals)\n\nsession = cognitiveAvg × presence × phone × drift × fatigue\n  presence = (1 − awayFraction) ^ 1.5\n  phone    = 1 − min(pickups × 0.09, 0.40)\n  drift    = 1 − min(early−late drop, 0.15)\n  fatigue  = 1 − min(PERCLOS + long-closure pen, 0.25)\n\nWithheld ("—") under ~60s on-screen or <3 blinks.'
+  },
+  {
+    title: 'Fatigue: PERCLOS & Blink Duration',
+    body: 'Unlike blink RATE (a weak focus proxy), these two are externally validated drowsiness markers from driving-safety research. PERCLOS is the percentage of time your eyes are closed; long, slow blink closures (>400 ms) indicate physical tiredness regardless of rate. The app tracks both — PERCLOS as a rolling live percentage, and the mean closure duration of your recent blinks (the closure time is already known because blinks are counted on reopening). They feed a small, capped fatigue penalty into the session score, so genuine tiredness lowers the number even if your blink rate looks normal.',
+    code: 'PERCLOS = closed_frames / valid_frames   (rolling)\nclosure = mean(blink closure durations), ms\n\nNormal screen PERCLOS: a few %\nPenalty starts at PERCLOS > 12% and closure > 350 ms\nfatigue penalty capped at 25% of the score.\nThe PERCLOS / Closure stat boxes turn orange when high.'
+  },
+  {
+    title: 'Personalized Baseline (relative scoring)',
+    body: 'Because resting blink rate varies so much between people, the app learns YOUR own engaged blink rate over time instead of judging you against fixed numbers. After each qualifying session it folds that session\'s mean rate (blinks ÷ on-task minutes) into a stored baseline using an exponential moving average. Once a couple of sessions exist, scoring switches from the fixed A–F brackets to a ratio against your baseline — so the same 18 BPM can be "your normal" for one person and "elevated" for another. The baseline persists across sessions; the Scoring-mode box shows whether it is active yet.',
+    code: 'sessionMeanBpm = blinks / (onTaskSeconds / 60)\nbaseline = baseline·(1−α) + sessionMeanBpm·α   (α=0.25)\n\nQualifies: session ≥ 120 s and ≥ 8 blinks,\n           3 ≤ sessionMeanBpm ≤ 60\nRelative scoring engages after 2 qualifying sessions;\nstored in atenttion-preferences.json (baselineBpm).'
   }
 ]
 
@@ -139,10 +150,15 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
   const liveJawOpen            = useStore((s) => s.liveJawOpen)
   const liveGaze               = useStore((s) => s.liveGaze)
   const phoneScorePct          = useStore((s) => s.phoneScorePct)
+  const inputIdleMs            = useStore((s) => s.inputIdleMs)
   const lastRecalAt            = useStore((s) => s.lastRecalAt)
   const blinkRate              = useStore((s) => s.blinkRate)
   const blinkVariability       = useStore((s) => s.blinkVariability)
   const blinkCount             = useStore((s) => s.blinkCount)
+  const livePerclos            = useStore((s) => s.livePerclos)
+  const liveBlinkDurMs         = useStore((s) => s.liveBlinkDurMs)
+  const baselineBpm            = useStore((s) => s.baselineBpm)
+  const baselineBpmConfidence  = useStore((s) => s.baselineBpmConfidence)
 
   const canvasRef = useRef(null)
   const [chartData, setChartData] = useState([])
@@ -182,9 +198,10 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
 
   const yawSuppressed = liveYaw  !== null && liveYaw  > 0.55
   const pitchSuppressed = livePitch !== null && (livePitch < 0.50 || livePitch > 2.50)
-  const jawSuppressed = liveJawOpen !== null && liveJawOpen > 0.15
+  const jawSuppressed = liveJawOpen !== null && liveJawOpen > 0.22
+  const typingActive = inputIdleMs !== null && inputIdleMs < TYPING_VETO_MS
 
-  const calMeanEar = earThreshold !== null ? (earThreshold / 0.75).toFixed(3) : null
+  const calMeanEar = earThreshold !== null ? (earThreshold / EAR_THRESHOLD_RATIO).toFixed(3) : null
   const calibrated = calibrationProgress >= 100 && earThreshold !== null && earThreshold !== 0.20
 
   const earZone = getEarZone(liveEar)
@@ -324,7 +341,7 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
           </div>
           <div className="flex justify-between text-neutral-400">
             <span>Adaptive threshold</span>
-            <span className="text-violet-300 font-mono">{earThreshold !== null ? earThreshold.toFixed(3) : '—'}<span className="text-neutral-600 ml-1">(p75 × 0.75)</span></span>
+            <span className="text-violet-300 font-mono">{earThreshold !== null ? earThreshold.toFixed(3) : '—'}<span className="text-neutral-600 ml-1">(p75 × {EAR_THRESHOLD_RATIO})</span></span>
           </div>
           <div className="flex justify-between text-neutral-400">
             <span>Static fallback</span>
@@ -353,6 +370,7 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
         <StatBox label="Pitch" value={livePitch?.toFixed(2)}  highlight={pitchSuppressed} />
         <StatBox label="Gaze"  value={liveGaze?.toFixed(3)} />
         <StatBox label="Phone" value={phoneScorePct > 0 ? `${phoneScorePct}%` : '—'} warning={phoneScorePct > 0} />
+        <StatBox label="Input" value={inputIdleMs === null ? '—' : (typingActive ? 'typing' : `${(inputIdleMs / 1000).toFixed(1)}s`)} warning={typingActive} />
         <StatBox label="Jaw"   value={liveJawOpen?.toFixed(2)} warning={jawSuppressed} />
         <StatBox label="BPM"   value={blinkRate || '—'} />
         <div className="flex-1 rounded-xl p-3 flex flex-col gap-1 bg-surface-2">
@@ -362,6 +380,24 @@ export default function EyeDebugPage({ videoRef, recalibrate }) {
           </span>
         </div>
         <StatBox label="Blinks" value={blinkCount || '—'} />
+      </div>
+
+      {/* Fatigue + personalized-baseline row */}
+      <div className="flex gap-2">
+        <StatBox label="PERCLOS"  value={livePerclos}    unit="%"  warning={livePerclos !== null && livePerclos > 15} />
+        <StatBox label="Closure"  value={liveBlinkDurMs} unit="ms" warning={liveBlinkDurMs !== null && liveBlinkDurMs > 400} />
+        <StatBox label="Baseline" value={baselineBpm}    unit="bpm" />
+        <StatBox label="Base conf" value={baselineBpmConfidence || '—'} />
+        <div className="flex-[2] rounded-xl p-3 flex flex-col gap-1 bg-surface-2">
+          <span className="text-[10px] uppercase tracking-widest text-neutral-500">Scoring mode</span>
+          <span className={`text-lg font-semibold ${
+            baselineBpmConfidence >= SCORE_CONFIG.BASELINE_MIN_CONF && baselineBpm ? 'text-emerald-400' : 'text-neutral-400'
+          }`}>
+            {baselineBpmConfidence >= SCORE_CONFIG.BASELINE_MIN_CONF && baselineBpm
+              ? 'Personalized (vs your baseline)'
+              : `Brackets (learning ${baselineBpmConfidence}/${SCORE_CONFIG.BASELINE_MIN_CONF})`}
+          </span>
+        </div>
       </div>
 
       {yawSuppressed && (

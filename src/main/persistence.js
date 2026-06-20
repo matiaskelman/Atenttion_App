@@ -57,7 +57,12 @@ function getLegacyPrefsPath() {
 
 async function writePreferences(prefs) {
   await ensureDir(getUserDataPath())
-  await writeFile(getPrefsPath(), JSON.stringify(prefs, null, 2), 'utf-8')
+  // Merge over whatever is already on disk so a caller that omits a field (e.g. a save
+  // that doesn't know about baselineBpm) never silently resets it to default on next load.
+  let existing = {}
+  try { existing = JSON.parse(await readFile(getPrefsPath(), 'utf-8')) } catch {}
+  const merged = { ...existing, ...prefs }
+  await writeFile(getPrefsPath(), JSON.stringify(merged, null, 2), 'utf-8')
 }
 
 function parseLegacyYaml(raw) {

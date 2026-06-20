@@ -11,6 +11,11 @@ export const useStore = create(subscribeWithSelector((set, get) => ({
   page: 'focus',
   setPage: (p) => set({ page: p }),
 
+  // Preferences autosave — timestamp of the last successful write to disk,
+  // used by the Settings page to flash passive "Saved" feedback.
+  prefsSavedAt: 0,
+  markPrefsSaved: () => set({ prefsSavedAt: Date.now() }),
+
   ...createPomodoroSlice(set, get),
   ...createEyeTrackerSlice(set, get),
   ...createSessionSlice(set, get),

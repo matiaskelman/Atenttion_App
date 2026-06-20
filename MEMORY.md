@@ -7,6 +7,7 @@ Add entries at the top of each section. Keep entries concise.
 
 ## Pending / Next Steps
 
+- **Live-verify the redesigned Focus Score** (2026-06-16): run real camera sessions and confirm `focusScore` + `scoreConfidence` are written correctly at both natural-completion and skip paths in the sessions JSON. Scenarios: clean baseline, heavy away-time, phone pickup, rising-blink drift, and a withheld "—" (camera off most of session / <3 blinks). Tunables in `SCORE_CONFIG` may need calibration on real hardware.
 - `markitdown` not yet installed. User needs to click "pip install" on the Docs page, or run `pip install markitdown` manually.
 - Nature paper (s41598-025-24264-5) is paywalled — couldn't retrieve it. If user shares it, add findings to `theoryLogic.md`.
 - User wants Documents page to be for research papers only (not user-facing context docs) — clarify use case if needed.
@@ -14,6 +15,25 @@ Add entries at the top of each section. Keep entries concise.
 ---
 
 ## Decisions Made
+
+### 2026-06-16 — Focus Score redesign (reliability)
+The Focus Score was unreliable: it saved a single **final-minute snapshot** of `computeFocusScore(blinkRate, cv)` at timer-zero and **ignored away-time and phone pickups entirely** (a user could look away or grab their phone repeatedly and still score 100). Redesigned into a two-layer score:
+1. **Instantaneous cognitive score** — `computeFocusScore(bpm, cv)` is unchanged (rate 55% + rhythm 45%), still drives the live banner.
+2. **Session score** — new `computeSessionScore(...)` in `focusScore.js`: `cognitiveAvg × presenceFactor × phoneFactor × driftFactor`, returns `{ score, confidence }`.
+   - `cognitiveAvg` = **time-weighted average** of the cognitive score over on-screen frames (not a snapshot). `useEyeTracker.js` accumulates `cogScoreWeightedSum`/`cogScorePresentMs` + a `cogScoreSamples` buffer (in `eyeTrackerSlice.js`) each face-visible frame; `usePomodoro.js` snapshots them at session start (`snapshotSessionStart`) and diffs at completion (`buildSessionScore`).
+   - `presenceFactor = (1 − awayFraction)^1.5` (super-linear — away bites harder).
+   - `phoneFactor = 1 − min(pickups × 0.09, 0.40)` (heavier, capped).
+   - `driftFactor` = capped (0.15) penalty when the last third of the session scores lower than the first (rising BPM / rising variability = losing focus).
+   - **Confidence:** withhold (`score: null`, UI "—") under ~60s on-screen or <3 blinks; `'low'` (faded "~N") under 180s / <8 blinks / awayFraction>0.5; else `'high'`. Low-confidence sessions excluded from Best Focus Hours.
+3. **Persistence:** sessions now also store `scoreConfidence`. Legacy sessions (no field) treated as acceptable.
+4. **UI:** `SessionsTable` FocusBadge renders "—" / faded "~N"; `StatsPage` Best Focus Hours filters low-confidence.
+5. **Docs:** `docs/blinksInfo.md` §3 rewritten as the source of truth for both layers; `EyeDebugPage.jsx` help text updated.
+
+**All tunables live in `SCORE_CONFIG`** (`src/renderer/src/constants/blinksConfig.js`) — one place to adjust penalties/thresholds.
+**Deliberate choices (confirmed with user — do NOT "fix" without asking):** app-usage is intentionally NOT in the score (only away + phone); universal A–F brackets kept with **no** per-user blink-baseline personalization.
+**Why:** the old score measured only the last 60s of blinking and threw away the behavioural signals it already recorded; time-weighting + presence/phone/drift penalties + a data-sufficiency gate make it represent the whole session.
+**Verified:** 9/9 pure-function assertions on `computeSessionScore`; full `electron-vite build` clean. Live camera end-to-end still pending (see Pending).
+Gotcha: the per-frame cognitive accumulation must run in the **face-visible branch** of `runFrame` (where `dt` exists) and only when `liveFocusScore != null`; accumulators reset in both `startTracking` and `stopTracking` alongside `blinkCount`.
 
 ### 2026-06-12 — Ritual UX overhaul + XLSX export
 UX review of the pre/post session ritual found it collected data (goal, mood, outcome) but never displayed any of it. Changes:
@@ -107,5 +127,8 @@ For one-off commands: `$env:ELECTRON_RUN_AS_NODE = $null` in PowerShell or `env 
 | `scripts/setup-models.js` | Copies face-api .bin model files from node_modules to public/models/ |
 | `src/main/persistence.js` | Markdown read/write for sessions + preferences |
 | `src/renderer/src/store/index.js` | All Zustand state — single flat store |
-| `src/renderer/src/hooks/useEyeTracker.js` | face-api detection loop, EAR blink detection |
-| `src/renderer/src/hooks/usePomodoro.js` | Timer state machine, session completion |
+| `src/renderer/src/hooks/useEyeTracker.js` | Detection loop, EAR blink detection, cognitive-score accumulation |
+| `src/renderer/src/hooks/usePomodoro.js` | Timer state machine, session completion, per-session score build |
+| `src/renderer/src/utils/focusScore.js` | `computeFocusScore` (live) + `computeSessionScore` (saved session score) |
+| `src/renderer/src/constants/blinksConfig.js` | `BPM_BRACKETS` + `SCORE_CONFIG` — single source for all scoring tunables |
+| `docs/blinksInfo.md` | Source of truth for blink brackets + the full Focus Score formula |

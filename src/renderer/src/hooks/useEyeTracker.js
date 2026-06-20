@@ -1,9 +1,16 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useStore } from '../store'
 import { computeFocusScore } from '../utils/focusScore'
+import { SCORE_CONFIG } from '../constants/blinksConfig'
 import { playBeep, playPhoneAlert } from '../utils/audio'
 
 const EAR_THRESHOLD         = 0.20
+// Adaptive blink threshold = restingEAR × EAR_THRESHOLD_RATIO. Higher = threshold line sits closer
+// to resting EAR, catching softer/partial blinks; too high and noise/micro-movements register as
+// false blinks. 0.85 = line 15% below resting EAR (was 0.80 / 20%) — raised to catch the light,
+// partial blinks common at a screen. The blendshape cross-check (BLEND_BLINK_MIN) filters the
+// extra noise this lets through. Tune from the Eye Tracker Debug page.
+export const EAR_THRESHOLD_RATIO = 0.85
 const BLINK_MIN_FRAMES      = 2
 const BLINK_MAX_FRAMES      = 15
 const YAW_THRESHOLD         = 0.55
@@ -12,6 +19,7 @@ const PITCH_UP_MAX          = 2.50
 const EAR_SMOOTH_FRAMES     = 3
 const CALIBRATION_WINDOW_MS = 10000
 const CALIBRATION_OPEN_MIN  = 0.15   // was 0.22 — captures small/tired eyes too
+const DOWN_GAZE_OPEN_MIN    = 0.10   // EMA floor while looking down — lets the threshold track gaze-depressed (open) EAR
 const EAR_HYSTERESIS        = 0.02   // dead zone above threshold to prevent oscillation
 const EAR_SPIKE_LIMIT       = 0.12   // max frame-to-frame EAR delta — clamps occlusion spikes
 const EAR_VALID_MIN         = 0.05   // below this = bad frame (hand/occlusion)
@@ -25,12 +33,24 @@ const PHONE_GAZE_DROP       = 0.045  // eyes-down = iris below personal baseline
 const PHONE_TRIGGER_MS      = 3000   // accumulated down-time that fires detection
 const PHONE_DECAY_FACTOR    = 2      // up-frames drain the accumulator 2× faster than down-frames fill it
 const PHONE_EAR_RATIO       = 0.88   // EAR booster: depressed EAR lowers the down-bar on borderline frames
-const PHONE_RESUME_CANCEL_MS = 500   // sustained down-time needed to cancel the resume countdown (flicker-proof)
+const PHONE_RESUME_CANCEL_MS = 500   // sustained down-time / face-loss that erodes the resume accumulator (flicker-proof)
+const PHONE_RESUME_MS       = 5000   // accumulated screen-gaze time (leaky) needed to auto-resume after a phone pause
 const PHONE_COOLDOWN_MS     = 8000   // after a phone resume, block re-triggering while baselines settle
+export const TYPING_VETO_MS = 2500   // recent kb/mouse input within this window vetoes phone-score build (= active user)
+const IDLE_POLL_MS          = 500    // cadence for polling system input idle time from main
 const RECAL_INTERVAL_MS     = 60000  // background recalibration cadence
 const RECAL_WINDOW_MS       = 10000  // background sampling window length
 const RECAL_MIN_SAMPLES     = 30     // minimum valid samples to accept a background recalibration
 const BASELINE_ALPHA        = 0.005  // slow drift-tracking EMA for pitch/gaze baselines on up-frames
+const COG_SAMPLE_INTERVAL_MS = 20000 // cadence for pushing a cognitive-score sample into the drift buffer
+const RATE_RECOMPUTE_MS     = 1000   // recompute BPM/score on the loop (not only on blink) so the rate DECAYS
+const BLEND_BLINK_MIN       = 0.15   // MediaPipe eyeBlink blendshape must peak above this during a closure
+                                     // for it to count. Kept LOW so it only rejects gross non-blinks
+                                     // (occlusion/jitter where the trained model sees no eye-closing) and never
+                                     // vetoes genuine light/partial blinks that the 0.85 EAR threshold now catches.
+const AWAY_PAUSE_GRACE_MS   = 4000   // extra sustained-absence time beyond the away threshold before AUTO-PAUSING;
+                                     // lets brief think-glances / reaching for coffee show "away" without killing the timer
+const PERCLOS_EMA_ALPHA     = 0.003  // slow EMA for the LIVE PERCLOS readout (~30s window at 30 fps)
 
 // MediaPipe 478-point mesh — 6 EAR landmarks per eye
 const L_EYE = [362, 385, 387, 263, 373, 380]
@@ -52,6 +72,20 @@ function dist(a, b) {
 function getEAR(lm, indices, w, h) {
   const p = indices.map((i) => ({ x: lm[i].x * w, y: lm[i].y * h }))
   return (dist(p[1], p[5]) + dist(p[2], p[4])) / (2 * dist(p[0], p[3]))
+}
+
+// Mean of MediaPipe's trained eyeBlink blendshapes (0 = open, 1 = fully closed). Returns null
+// when blendshapes are unavailable so blink logic falls back to EAR-only (no behaviour change).
+function getBlinkBlend(result) {
+  const cats = result.faceBlendshapes?.[0]?.categories
+  if (!cats) return null
+  let l = null, r = null
+  for (const c of cats) {
+    if (c.categoryName === 'eyeBlinkLeft') l = c.score
+    else if (c.categoryName === 'eyeBlinkRight') r = c.score
+  }
+  if (l === null && r === null) return null
+  return ((l ?? r) + (r ?? l)) / 2
 }
 
 export function useEyeTracker(videoRef) {
@@ -82,7 +116,8 @@ export function useEyeTracker(videoRef) {
   const pitchSamplesRef        = useRef([])
   const gazeSamplesRef         = useRef([])
   const phoneAutoPausedRef     = useRef(false)
-  const phoneResumeStartRef    = useRef(null)
+  const phoneResumeMsRef       = useRef(0)      // accumulated screen-gaze ms toward auto-resume (leaky)
+  const faceLostAtRef          = useRef(null)   // when the face went continuously missing — flicker-tolerant resume
   const phoneCooldownUntilRef  = useRef(0)      // post-resume window where re-triggering is blocked
   const resumePitchBufRef      = useRef([])     // confirmed screen-gaze samples during the 5s countdown
   const resumeGazeBufRef       = useRef([])
@@ -91,6 +126,14 @@ export function useEyeTracker(videoRef) {
   const recalEarSamplesRef     = useRef([])
   const recalPitchSamplesRef   = useRef([])
   const recalGazeSamplesRef    = useRef([])
+  const cogSampleAccumMsRef    = useRef(0)      // on-screen ms since the last cognitive-score sample
+  const blinkOnsetAtRef        = useRef(null)   // timestamp the current closure began — for blink duration
+  const maxBlendRef            = useRef(0)       // peak eyeBlink blendshape seen during the current closure
+  const perclosEmaRef          = useRef(null)    // live PERCLOS EMA (fraction of frames eyes-closed)
+  const lastRateComputeAtRef   = useRef(0)       // throttle for the on-loop BPM/score recompute (decay)
+  const idleMsRef              = useRef(null)    // last polled system input-idle ms (null until first poll)
+  const idlePolledAtRef        = useRef(0)       // wall-clock time idleMsRef was set (for extrapolation)
+  const idlePollRef            = useRef(null)    // setInterval id for the idle poll
 
   const loadModels = useCallback(async () => {
     const s = useStore.getState()
@@ -103,6 +146,7 @@ export function useEyeTracker(videoRef) {
         baseOptions: { modelAssetPath: MODEL_PATH },
         runningMode: 'VIDEO',
         numFaces: 1,
+        outputFaceBlendshapes: true,   // trained eyeBlinkLeft/Right — pose-robust cross-check for EAR
         minFaceDetectionConfidence: 0.5,
         minFacePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5
@@ -114,6 +158,23 @@ export function useEyeTracker(videoRef) {
     } finally {
       useStore.getState().setModelLoading(false)
     }
+  }, [])
+
+  // Recompute live BPM + focus score from the trailing-60s blink window. Called on every confirmed
+  // blink AND on a ~1s loop tick so the rate DECAYS when blinking slows/stops. Previously the rate
+  // and score only updated ON a blink, so during blink-suppression (deep focus) they froze at the
+  // last value — hiding the very state the app cares about and over-weighting a stale score.
+  const recomputeRate = useCallback((now) => {
+    blinkTimesRef.current = blinkTimesRef.current.filter((t) => now - t < 60000)
+    const elapsed = trackingStartTimeRef.current ? now - trackingStartTimeRef.current : 60000
+    const denominator = Math.max(Math.min(elapsed, 60000), 20000)
+    const liveBPM = Math.round(blinkTimesRef.current.length * 60000 / denominator)
+    const st = useStore.getState()
+    if (liveBPM !== st.blinkRate) st.setBlinkRate(liveBPM)
+    // Personalized scoring once the baseline is confident; otherwise absolute-bracket fallback (null).
+    const baseline = st.baselineBpmConfidence >= SCORE_CONFIG.BASELINE_MIN_CONF ? st.baselineBpm : null
+    const score = computeFocusScore(liveBPM, st.blinkVariability, baseline)
+    if (score !== st.liveFocusScore) st.setLiveFocusScore(score)
   }, [])
 
   const runFrame = useCallback(() => {
@@ -130,15 +191,20 @@ export function useEyeTracker(videoRef) {
     try {
       const result = landmarker.detectForVideo(video, Date.now())
       const lm = result.faceLandmarks?.[0]
+      const blendBlink = getBlinkBlend(result)   // null when blendshapes unavailable → EAR-only fallback
 
       if (!lm) {
-        // Face not visible — hold the phone score (deep phone gaze often loses the face),
-        // but the resume countdown needs continuous visible up-frames, so reset it.
-        phoneResumeStartRef.current  = null
+        // Face not visible — hold the phone score (deep phone gaze often loses the face).
+        // Only a SUSTAINED loss erodes resume progress; a 1-frame detection blip must not, or the
+        // leaky resume accumulator can never reach PHONE_RESUME_MS (this was the auto-resume bug).
+        if (!faceLostAtRef.current) faceLostAtRef.current = Date.now()
         lastFrameTimeRef.current     = null
         phoneDownStreakMsRef.current = 0
-        resumePitchBufRef.current    = []
-        resumeGazeBufRef.current     = []
+        if (Date.now() - faceLostAtRef.current > PHONE_RESUME_CANCEL_MS) {
+          phoneResumeMsRef.current  = 0
+          resumePitchBufRef.current = []
+          resumeGazeBufRef.current  = []
+        }
         if (!awayStartRef.current) awayStartRef.current = Date.now()
         const awayMs = Date.now() - awayStartRef.current
         s.setLookingAwaySeconds(Math.round(awayMs / 1000))
@@ -161,7 +227,10 @@ export function useEyeTracker(videoRef) {
                 new Notification('Atenttion', { body: 'Phone detected — timer paused.', silent: true })
               }
               window.api?.overlay?.phoneDetected?.(true)
-            } else {
+            } else if (awayMs > threshold + AWAY_PAUSE_GRACE_MS) {
+              // Ordinary look-away: only AUTO-PAUSE once absence is sustained past the grace window.
+              // Status already flipped to 'away' at the threshold so the user still sees feedback;
+              // this avoids killing the timer for a quick reach-for-coffee or lean-back-to-think.
               autoPausedRef.current = true
               current.setPomodoroState('paused')
               const prefs = useStore.getState()
@@ -173,6 +242,7 @@ export function useEyeTracker(videoRef) {
           }
         }
       } else {
+        faceLostAtRef.current = null   // face is back — reset the continuous-loss streak
         if (awayStartRef.current) {
           const awaySeconds = (Date.now() - awayStartRef.current) / 1000
           s.addLookingAway(awaySeconds)
@@ -253,7 +323,7 @@ export function useEyeTracker(videoRef) {
           // Use 75th percentile of open-eye readings — robust to any eye size
           const sorted = [...calibrationSamplesRef.current].sort((a, b) => a - b)
           const p75    = sorted[Math.floor(sorted.length * 0.75)]
-          adaptiveThresholdRef.current = p75 * 0.75
+          adaptiveThresholdRef.current = p75 * EAR_THRESHOLD_RATIO
           openEyeEmaRef.current        = p75
           calibrationSamplesRef.current = []
           // Median pitch/gaze = personal "looking at screen" baseline (camera-geometry independent)
@@ -297,7 +367,7 @@ export function useEyeTracker(videoRef) {
             if (recalEarSamplesRef.current.length >= RECAL_MIN_SAMPLES) {
               const sorted = [...recalEarSamplesRef.current].sort((a, b) => a - b)
               const p75    = sorted[Math.floor(sorted.length * 0.75)]
-              adaptiveThresholdRef.current = p75 * 0.75
+              adaptiveThresholdRef.current = p75 * EAR_THRESHOLD_RATIO
               openEyeEmaRef.current        = p75
               s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
               recalSucceeded = true
@@ -332,8 +402,35 @@ export function useEyeTracker(videoRef) {
         const dt = lastFrameTimeRef.current ? Math.min(frameNow - lastFrameTimeRef.current, 200) : 33
         lastFrameTimeRef.current = frameNow
 
+        // Time-weighted cognitive-score accumulation — drives the whole-session Focus Score.
+        // Weights the live (per-blink) cognitive estimate by on-screen frame time; a periodic
+        // sample feeds the drift (early-vs-late trend) calculation. Only counts while a face is
+        // visible (this branch) and a score exists.
+        const liveScoreNow = useStore.getState().liveFocusScore
+        if (liveScoreNow != null) {
+          s.addCogScore(liveScoreNow, dt)
+          cogSampleAccumMsRef.current += dt
+          if (cogSampleAccumMsRef.current >= COG_SAMPLE_INTERVAL_MS) {
+            cogSampleAccumMsRef.current = 0
+            s.pushCogScoreSample(liveScoreNow)
+          }
+        }
+
+        // Decay tick: recompute BPM/score ~1×/s so the rate falls when blinking slows, and publish
+        // the live fatigue readouts (PERCLOS %). Cheap relative to the per-frame debug writes below.
+        if (frameNow - lastRateComputeAtRef.current >= RATE_RECOMPUTE_MS) {
+          lastRateComputeAtRef.current = frameNow
+          recomputeRate(frameNow)
+          if (perclosEmaRef.current !== null) s.setLivePerclos(Math.round(perclosEmaRef.current * 1000) / 10)
+        }
+
         const phoneUseExpected = useStore.getState().phoneUseExpected
         if (phoneUseExpected === false) {
+          // Recent system-wide keyboard/mouse input → the user is actively at the computer, not on a
+          // phone. Vetoes phone-score accumulation while looking down to type / read the keyboard.
+          // null idle (no poll yet) → false → no veto (fail-safe).
+          const recentInput = idleMsRef.current !== null
+            && (idleMsRef.current + (Date.now() - idlePolledAtRef.current)) < TYPING_VETO_MS
           // Frame classifier — relative drops vs calibrated baselines. Head down OR eyes down counts;
           // a depressed EAR lowers the bar on borderline frames. Pre-calibration falls back to the
           // absolute pitch threshold (conservative: may under-detect, never over-detects).
@@ -357,24 +454,33 @@ export function useEyeTracker(videoRef) {
             // EAR-booster path may feed the accumulator but must never cancel a resume countdown
             phoneDownStreakMsRef.current = strongDown ? phoneDownStreakMsRef.current + dt : 0
             lastDownFrameAtRef.current = frameNow
+            // Down-time erodes resume progress (net ~5s of look-up over look-down required); a
+            // sustained streak clears it outright (user clearly went back to the phone).
+            phoneResumeMsRef.current = Math.max(0, phoneResumeMsRef.current - dt)
             if (phoneDownStreakMsRef.current > PHONE_RESUME_CANCEL_MS) {
-              phoneResumeStartRef.current = null
-              resumePitchBufRef.current   = []
-              resumeGazeBufRef.current    = []
+              phoneResumeMsRef.current  = 0
+              resumePitchBufRef.current = []
+              resumeGazeBufRef.current  = []
             }
-            phoneScoreRef.current = Math.min(phoneScoreRef.current + dt, PHONE_TRIGGER_MS)
-            const freshState = useStore.getState()
-            if (phoneScoreRef.current >= PHONE_TRIGGER_MS && freshState.pomodoroState === 'work'
-                && !phoneAutoPausedRef.current && frameNow >= phoneCooldownUntilRef.current) {
-              phoneAutoPausedRef.current = true
-              freshState.setPomodoroState('paused')
-              freshState.setPhoneDetected(true)
-              freshState.incrementPhonePickups()
-              playPhoneAlert()
-              if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification('Atenttion', { body: 'Phone detected — timer paused.', silent: true })
+            if (recentInput) {
+              // Typing / using the mouse while looking down — not a phone. Drain the score instead of
+              // building it (and don't drift baselines here — this is still a down pose).
+              phoneScoreRef.current = Math.max(0, phoneScoreRef.current - dt * PHONE_DECAY_FACTOR)
+            } else {
+              phoneScoreRef.current = Math.min(phoneScoreRef.current + dt, PHONE_TRIGGER_MS)
+              const freshState = useStore.getState()
+              if (phoneScoreRef.current >= PHONE_TRIGGER_MS && freshState.pomodoroState === 'work'
+                  && !phoneAutoPausedRef.current && frameNow >= phoneCooldownUntilRef.current) {
+                phoneAutoPausedRef.current = true
+                freshState.setPomodoroState('paused')
+                freshState.setPhoneDetected(true)
+                freshState.incrementPhonePickups()
+                playPhoneAlert()
+                if ('Notification' in window && Notification.permission === 'granted') {
+                  new Notification('Atenttion', { body: 'Phone detected — timer paused.', silent: true })
+                }
+                window.api?.overlay?.phoneDetected?.(true)
               }
-              window.api?.overlay?.phoneDetected?.(true)
             }
           } else {
             phoneDownStreakMsRef.current = 0
@@ -388,7 +494,7 @@ export function useEyeTracker(videoRef) {
             if (phoneAutoPausedRef.current && freshState.pomodoroState !== 'paused') {
               // User manually resumed — clean up phone state
               phoneAutoPausedRef.current = false
-              phoneResumeStartRef.current = null
+              phoneResumeMsRef.current = 0
               phoneScoreRef.current = 0
               resumePitchBufRef.current = []
               resumeGazeBufRef.current  = []
@@ -396,13 +502,13 @@ export function useEyeTracker(videoRef) {
               freshState.setPhoneDetected(false)
               window.api?.overlay?.phoneDetected?.(false)
             } else if (phoneAutoPausedRef.current && freshState.pomodoroState === 'paused') {
-              // 5-second sustained look-up before resuming
-              if (!phoneResumeStartRef.current) phoneResumeStartRef.current = Date.now()
+              // Leaky accumulator of confirmed screen-gaze time — tolerant of brief face-loss / glances
+              // (those just stop adding; sustained down/loss erodes or zeros it). Resume at PHONE_RESUME_MS.
+              phoneResumeMsRef.current += dt
               // These frames are confirmed screen-gaze — collect them to re-anchor baselines
               resumePitchBufRef.current.push(pitchRatio)
               resumeGazeBufRef.current.push(gazeRatio)
-              const resumeMs = Date.now() - phoneResumeStartRef.current
-              if (resumeMs >= 5000) {
+              if (phoneResumeMsRef.current >= PHONE_RESUME_MS) {
                 // Re-anchor: posture often shifts while handling the phone; without this the
                 // stale baselines keep classifying normal screen-gaze as "down" (and the
                 // drift EMA can never correct them, since it only runs on up-frames)
@@ -416,7 +522,7 @@ export function useEyeTracker(videoRef) {
                 resumeGazeBufRef.current  = []
                 phoneCooldownUntilRef.current = Date.now() + PHONE_COOLDOWN_MS
                 phoneAutoPausedRef.current = false
-                phoneResumeStartRef.current = null
+                phoneResumeMsRef.current = 0
                 phoneScoreRef.current = 0
                 freshState.setPomodoroState('work')
                 freshState.setPhoneDetected(false)
@@ -452,20 +558,35 @@ export function useEyeTracker(videoRef) {
           const earValid = rawEar >= EAR_VALID_MIN && rawEar <= EAR_VALID_MAX
 
           if (earValid) {
+            // PERCLOS — fraction of valid frames with the eye below the blink threshold. This and
+            // long blink closures are the externally validated drowsiness markers; they feed the
+            // session score's fatigue factor and the live PERCLOS readout.
+            const eyeClosed = ear < adaptiveThresholdRef.current
+            s.addFatigueFrame(eyeClosed, dt)
+            perclosEmaRef.current = perclosEmaRef.current === null
+              ? (eyeClosed ? 1 : 0)
+              : perclosEmaRef.current * (1 - PERCLOS_EMA_ALPHA) + (eyeClosed ? 1 : 0) * PERCLOS_EMA_ALPHA
+
             // Post-calibration EMA: keep threshold aligned with resting EAR as head pose changes.
             // Guard is absolute floor (CALIBRATION_OPEN_MIN) rather than adaptive threshold so the
             // EMA can recover even when resting EAR has drifted below the current threshold.
-            if (calElapsed >= CALIBRATION_WINDOW_MS && ear > CALIBRATION_OPEN_MIN) {
+            // Down-gaze adaptation: a sustained head-down pose (pitch-based, blink-robust) means a low
+            // EAR is expected from gaze, not a closed eye. Lower the EMA floor + adapt fast so the
+            // threshold tracks the gaze-depressed open EAR instead of freezing above it.
+            const pitchDown = baselinePitchRef.current !== null
+              && (baselinePitchRef.current - pitchRatio) > PHONE_PITCH_DROP * 0.6
+            const emaFloor = pitchDown ? DOWN_GAZE_OPEN_MIN : CALIBRATION_OPEN_MIN
+            if (calElapsed >= CALIBRATION_WINDOW_MS && ear > emaFloor) {
               if (openEyeEmaRef.current === null) {
                 openEyeEmaRef.current = ear
               } else {
                 const nearEma = ear > openEyeEmaRef.current * 0.88
                 stableOpenFramesRef.current = nearEma ? stableOpenFramesRef.current + 1 : 0
-                const alpha = stableOpenFramesRef.current > 30 ? ALPHA_FAST : ALPHA_SLOW
+                const alpha = (pitchDown || stableOpenFramesRef.current > 30) ? ALPHA_FAST : ALPHA_SLOW
                 openEyeEmaRef.current = openEyeEmaRef.current * (1 - alpha) + ear * alpha
               }
-              if (++postCalFramesRef.current % 25 === 0) {
-                adaptiveThresholdRef.current = openEyeEmaRef.current * 0.75
+              if (++postCalFramesRef.current % (pitchDown ? 5 : 25) === 0) {
+                adaptiveThresholdRef.current = openEyeEmaRef.current * EAR_THRESHOLD_RATIO
                 s.setEarThreshold(Math.round(adaptiveThresholdRef.current * 1000) / 1000)
               }
             }
@@ -473,14 +594,23 @@ export function useEyeTracker(videoRef) {
             const openThreshold = adaptiveThresholdRef.current + EAR_HYSTERESIS
 
             if (ear < adaptiveThresholdRef.current) {
+              if (blinkFramesRef.current === 0) {
+                blinkOnsetAtRef.current = Date.now()    // closure onset → blink duration at rising edge
+                maxBlendRef.current = blendBlink ?? 0   // start tracking the peak blink blendshape
+              } else if (blendBlink !== null && blendBlink > maxBlendRef.current) {
+                maxBlendRef.current = blendBlink
+              }
               blinkFramesRef.current++
               if (blinkFramesRef.current === BLINK_MIN_FRAMES) {
                 isBlinkingRef.current = true
                 s.setEyeStatus('blinking')
               }
             } else if (ear >= openThreshold) {
-              // Rising edge: count only if closure lasted between MIN and MAX frames
-              if (isBlinkingRef.current && blinkFramesRef.current <= BLINK_MAX_FRAMES) {
+              // Rising edge: count only if closure lasted MIN..MAX frames AND the trained blink
+              // blendshape actually fired during it (cross-check rejects EAR jitter/occlusion).
+              // blendBlink === null (blendshapes off) → blendOk true → pure EAR fallback.
+              const blendOk = blendBlink === null || maxBlendRef.current >= BLEND_BLINK_MIN
+              if (isBlinkingRef.current && blinkFramesRef.current <= BLINK_MAX_FRAMES && blendOk) {
                 earBufferRef.current = []   // reset buffer so next blink evaluates from fresh baseline
 
                 blinkCountRef.current++
@@ -492,7 +622,9 @@ export function useEyeTracker(videoRef) {
                   if (interval < 30000) {
                     blinkIntervalsRef.current.push(interval)
                     if (blinkIntervalsRef.current.length > 20) blinkIntervalsRef.current.shift()
-                    if (blinkIntervalsRef.current.length >= 3) {
+                    // Gate CV behind enough intervals: a CV from <6 samples is statistically
+                    // meaningless yet carries 45% of the live score, so it stays null until then.
+                    if (blinkIntervalsRef.current.length >= SCORE_CONFIG.CV_MIN_INTERVALS) {
                       const vals = blinkIntervalsRef.current
                       const mean = vals.reduce((a, b) => a + b, 0) / vals.length
                       const std  = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length)
@@ -500,18 +632,18 @@ export function useEyeTracker(videoRef) {
                     }
                   }
                 }
-                blinkTimesRef.current = blinkTimesRef.current.filter((t) => now - t < 60000)
                 blinkTimesRef.current.push(now)
-                const elapsed = trackingStartTimeRef.current ? now - trackingStartTimeRef.current : 60000
-                // Clamp denominator to [20s, 60s]: prevents wild spikes on the first few blinks
-                // while still normalising correctly once 20s of data have accumulated.
-                const denominator = Math.max(Math.min(elapsed, 60000), 20000)
-                const liveBPM = Math.round(blinkTimesRef.current.length * 60000 / denominator)
-                s.setBlinkRate(liveBPM)
-                s.setLiveFocusScore(computeFocusScore(liveBPM, useStore.getState().blinkVariability))
+                // Blink-closure duration (fatigue marker) — onset captured when EAR first dropped
+                if (blinkOnsetAtRef.current) {
+                  s.addBlinkDuration(now - blinkOnsetAtRef.current)
+                  const dc = useStore.getState()
+                  if (dc.blinkDurCount > 0) s.setLiveBlinkDurMs(Math.round(dc.blinkDurSumMs / dc.blinkDurCount))
+                }
+                recomputeRate(now)   // BPM + live focus score (also decays on the ~1s loop tick)
               }
               blinkFramesRef.current = 0
               isBlinkingRef.current  = false
+              maxBlendRef.current    = 0
               if (useStore.getState().eyeStatus !== 'looking') s.setEyeStatus('looking')
             }
             // ear between T and T+EAR_HYSTERESIS: dead zone — no state change
@@ -541,7 +673,7 @@ export function useEyeTracker(videoRef) {
     if (activeRef.current) {
       rafRef.current = setTimeout(runFrame, 33)
     }
-  }, [videoRef])
+  }, [videoRef, recomputeRate])
 
   const startTracking = useCallback(async () => {
     const s = useStore.getState()
@@ -572,7 +704,8 @@ export function useEyeTracker(videoRef) {
     pitchSamplesRef.current       = []
     gazeSamplesRef.current        = []
     phoneAutoPausedRef.current    = false
-    phoneResumeStartRef.current   = null
+    phoneResumeMsRef.current      = 0
+    faceLostAtRef.current         = null
     phoneCooldownUntilRef.current = 0
     resumePitchBufRef.current     = []
     resumeGazeBufRef.current      = []
@@ -581,11 +714,35 @@ export function useEyeTracker(videoRef) {
     recalEarSamplesRef.current    = []
     recalPitchSamplesRef.current  = []
     recalGazeSamplesRef.current   = []
+    cogSampleAccumMsRef.current   = 0
+    blinkOnsetAtRef.current       = null
+    maxBlendRef.current           = 0
+    perclosEmaRef.current         = null
+    lastRateComputeAtRef.current  = 0
     s.setPhoneScorePct(0)
     s.setBlinkCount(0)
     s.setBlinkRate(0)
     s.setBlinkVariability(null)
     s.setLiveFocusScore(null)
+    s.setLivePerclos(null)
+    s.setLiveBlinkDurMs(null)
+    s.resetScoreAccum()
+
+    // System input idle poll — feeds the typing/mouse phone veto + the debug "Input" stat
+    idleMsRef.current        = null
+    idlePolledAtRef.current  = 0
+    s.setInputIdleMs(null)
+    if (idlePollRef.current) clearInterval(idlePollRef.current)
+    idlePollRef.current = setInterval(async () => {
+      try {
+        const ms = await window.api?.system?.getIdleMs?.()
+        if (typeof ms === 'number') {
+          idleMsRef.current = ms
+          idlePolledAtRef.current = Date.now()
+          useStore.getState().setInputIdleMs(Math.round(ms))
+        }
+      } catch { /* idle source unavailable — leave refs as-is (no veto) */ }
+    }, IDLE_POLL_MS)
 
     activeRef.current = true
     s.setEyeTrackingActive(true)
@@ -625,7 +782,8 @@ export function useEyeTracker(videoRef) {
     pitchSamplesRef.current       = []
     gazeSamplesRef.current        = []
     phoneAutoPausedRef.current    = false
-    phoneResumeStartRef.current   = null
+    phoneResumeMsRef.current      = 0
+    faceLostAtRef.current         = null
     phoneCooldownUntilRef.current = 0
     resumePitchBufRef.current     = []
     resumeGazeBufRef.current      = []
@@ -634,7 +792,16 @@ export function useEyeTracker(videoRef) {
     recalEarSamplesRef.current    = []
     recalPitchSamplesRef.current  = []
     recalGazeSamplesRef.current   = []
+    cogSampleAccumMsRef.current   = 0
+    blinkOnsetAtRef.current       = null
+    maxBlendRef.current           = 0
+    perclosEmaRef.current         = null
+    lastRateComputeAtRef.current  = 0
+    if (idlePollRef.current) { clearInterval(idlePollRef.current); idlePollRef.current = null }
+    idleMsRef.current             = null
+    idlePolledAtRef.current       = 0
     useStore.getState().setPhoneScorePct(0)
+    useStore.getState().setInputIdleMs(null)
 
     const s = useStore.getState()
     s.setEyeTrackingActive(false)
@@ -643,6 +810,9 @@ export function useEyeTracker(videoRef) {
     s.setBlinkRate(0)
     s.setBlinkVariability(null)
     s.setLiveFocusScore(null)
+    s.setLivePerclos(null)
+    s.setLiveBlinkDurMs(null)
+    s.resetScoreAccum()
   }, [])
 
   const recalibrate = useCallback(() => {
@@ -659,6 +829,8 @@ export function useEyeTracker(videoRef) {
     baselinePitchRef.current      = null
     baselineGazeRef.current       = null
     phoneScoreRef.current         = 0
+    blinkOnsetAtRef.current       = null
+    maxBlendRef.current           = 0
     recalNextAtRef.current        = 0
     recalWindowEndRef.current     = null
     recalEarSamplesRef.current    = []
@@ -674,6 +846,7 @@ export function useEyeTracker(videoRef) {
     return () => {
       activeRef.current = false
       if (rafRef.current) clearTimeout(rafRef.current)
+      if (idlePollRef.current) clearInterval(idlePollRef.current)
     }
   }, [])
 

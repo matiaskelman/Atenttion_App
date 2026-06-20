@@ -1,12 +1,13 @@
-import { Timer, BarChart2, Monitor, Headphones, ScanEye } from 'lucide-react'
+import { Timer, BarChart2, Trophy, Monitor, Headphones, ScanEye, Settings2 } from 'lucide-react'
 import { useStore } from '../store'
 
 const nav = [
-  { id: 'focus',    icon: Timer,       label: 'Focus' },
-  { id: 'stats',    icon: BarChart2,   label: 'Stats' },
-  { id: 'system',   icon: Monitor,     label: 'System' },
-  { id: 'audios',   icon: Headphones,  label: 'Audio' },
-  { id: 'eyedebug', icon: ScanEye,     label: 'Eye Debug' },
+  { id: 'focus',      icon: Timer,       label: 'Focus' },
+  { id: 'stats',      icon: BarChart2,   label: 'Stats' },
+  { id: 'milestones', icon: Trophy,      label: 'Goals' },
+  { id: 'system',     icon: Monitor,     label: 'System' },
+  { id: 'audios',     icon: Headphones,  label: 'Audio' },
+  { id: 'eyedebug',   icon: ScanEye,     label: 'Eye Debug' },
 ]
 
 export default function Sidebar() {
@@ -47,6 +48,21 @@ export default function Sidebar() {
       ))}
 
       <div className="mt-auto flex flex-col items-center gap-2">
+        <button
+          onClick={() => setPage('settings')}
+          title="Settings"
+          data-page="settings"
+          className={`
+            relative w-12 h-12 flex flex-col items-center justify-center gap-0.5 rounded-xl transition-all
+            ${page === 'settings'
+              ? 'bg-violet-500/20 text-violet-400'
+              : 'text-neutral-500 hover:text-neutral-300 hover:bg-surface-2'
+            }
+          `}
+        >
+          <Settings2 size={18} />
+          <span className="text-[9px] font-medium">Settings</span>
+        </button>
         <div className="w-8 border-t border-surface-3" />
         <div
           title={`Eye: ${eyeStatus}`}
