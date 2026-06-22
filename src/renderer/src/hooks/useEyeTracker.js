@@ -30,6 +30,7 @@ const ALPHA_SLOW            = 0.016  // EMA rate during normal tracking (~43-fra
 const ALPHA_FAST            = 0.060  // EMA rate when eye is clearly stable (~11-frame half-life, 0.4s)
 const PHONE_PITCH_DROP      = 0.15   // head-down = pitch below personal baseline by this much
 const PHONE_GAZE_DROP       = 0.045  // eyes-down = iris below personal baseline by this much (÷ eyeSpan)
+const PHONE_GAZE_STRONG     = 0.09   // eyes cast THIS far down count alone (level head) — phone held at eye/chest height
 const PHONE_TRIGGER_MS      = 3000   // accumulated down-time that fires detection
 const PHONE_DECAY_FACTOR    = 2      // up-frames drain the accumulator 2× faster than down-frames fill it
 const PHONE_EAR_RATIO       = 0.88   // EAR booster: depressed EAR lowers the down-bar on borderline frames
@@ -431,9 +432,12 @@ export function useEyeTracker(videoRef) {
           // null idle (no poll yet) → false → no veto (fail-safe).
           const recentInput = idleMsRef.current !== null
             && (idleMsRef.current + (Date.now() - idlePolledAtRef.current)) < TYPING_VETO_MS
-          // Frame classifier — relative drops vs calibrated baselines. Head down OR eyes down counts;
-          // a depressed EAR lowers the bar on borderline frames. Pre-calibration falls back to the
-          // absolute pitch threshold (conservative: may under-detect, never over-detects).
+          // Frame classifier — relative drops vs calibrated baselines. Counts as down when head AND
+          // eyes both drop (a single mis-anchored axis can't flag normal screen-gaze), OR when the eyes
+          // alone cast strongly down (PHONE_GAZE_STRONG — catches a phone held level with the head,
+          // while ordinary screen-glance / baseline drift never reaches that bar); a depressed EAR
+          // lowers the bar on borderline frames. Pre-calibration falls back to the absolute pitch
+          // threshold (conservative: may under-detect, never over-detects).
           const earLow = openEyeEmaRef.current !== null && ear < openEyeEmaRef.current * PHONE_EAR_RATIO
           let downFrame, strongDown
           if (baselinePitchRef.current === null) {
@@ -442,10 +446,12 @@ export function useEyeTracker(videoRef) {
           } else {
             const pitchDrop  = baselinePitchRef.current - pitchRatio
             const gazeDrop   = gazeRatio - baselineGazeRef.current
-            const headDown   = pitchDrop > PHONE_PITCH_DROP
-            const eyesDown   = gazeDrop  > PHONE_GAZE_DROP
+            const headDown     = pitchDrop > PHONE_PITCH_DROP
+            const eyesDown     = gazeDrop  > PHONE_GAZE_DROP
+            const eyesDownHard = gazeDrop  > PHONE_GAZE_STRONG
             const borderline = pitchDrop > PHONE_PITCH_DROP * 0.6 || gazeDrop > PHONE_GAZE_DROP * 0.6
-            strongDown = headDown || eyesDown
+            // Both axes agree, OR eyes cast strongly down on their own (level-head phone use).
+            strongDown = (headDown && eyesDown) || eyesDownHard
             downFrame  = strongDown || (earLow && borderline)
           }
 

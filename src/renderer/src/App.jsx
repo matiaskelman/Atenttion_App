@@ -74,6 +74,14 @@ export default function App() {
     return () => { clearTimeout(timer); unsub() }
   }, [])
 
+  // Record first ambient-sound use for the Getting Started checklist
+  useEffect(() => {
+    return useStore.subscribe(
+      (s) => s.audioPlaying,
+      (audioPlaying) => { if (audioPlaying) useStore.getState().markFeatureUsed('audio') }
+    )
+  }, [])
+
   const overlayFeedbackActiveRef = useRef(false)
 
   // Mirror post-ritual modal state into the overlay feedback card

@@ -52,7 +52,7 @@ export default function Pomodoro({ controls }) {
   const offset = circumference * (1 - progress)
 
   return (
-    <div className="card flex flex-col items-center gap-6 py-8">
+    <div className="card flex flex-col items-center justify-center h-full gap-6 py-8">
       {/* Mode badge */}
       <span className={`text-xs font-semibold px-3 py-1 rounded-full ${colors.badge}`}>
         {modeLabel[pomodoroMode]}
@@ -93,12 +93,14 @@ export default function Pomodoro({ controls }) {
           onClick={handleReset}
           className={`btn-icon ${confirmReset ? 'text-amber-400 bg-amber-500/10' : 'text-neutral-500 hover:text-neutral-300'}`}
           title={confirmReset ? 'Click again to reset' : 'Reset'}
+          aria-label={confirmReset ? 'Confirm reset, discard session' : 'Reset timer'}
         >
           <RotateCcw size={16} />
         </button>
 
         <button
           onClick={isRunning ? pause : start}
+          aria-label={isRunning ? 'Pause timer' : 'Start timer'}
           className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${
             pomodoroMode === 'work'
               ? 'bg-violet-600 hover:bg-violet-500 shadow-violet'
@@ -115,6 +117,7 @@ export default function Pomodoro({ controls }) {
           onClick={skip}
           className="btn-icon text-neutral-500 hover:text-neutral-300"
           title="Skip"
+          aria-label="Skip to next session"
         >
           <SkipForward size={16} />
         </button>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Eye, EyeOff, Loader2, AlertTriangle, Activity, CheckCircle2, ChevronDown } from 'lucide-react'
+import { Eye, EyeOff, Loader2, AlertTriangle, Activity, CheckCircle2, ChevronDown, HelpCircle } from 'lucide-react'
 import { useStore } from '../store'
 import { findBracket, getRelativeState, SCORE_CONFIG } from '../constants/blinksConfig'
 
@@ -41,8 +41,10 @@ export default function EyeTracker({ controls }) {
   const display = relState || bracket
   const cfg     = statusConfig[eyeStatus] || statusConfig.unknown
 
+  const focusTip = `Estimate from your blink patterns${relState ? ' vs your own baseline' : ''} — affected by dry eyes, lighting & screen distance.`
+
   return (
-    <div className="card flex flex-col gap-4">
+    <div className="card flex flex-col gap-4 h-full">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-neutral-300">Eye Tracking</h3>
         {modelLoading && (
@@ -98,7 +100,10 @@ export default function EyeTracker({ controls }) {
             {display && <span className={`text-[9px] ${display.color}`}>{display.label}</span>}
           </div>
           <div className="stat-mini">
-            <span className="stat-label">Focus</span>
+            <span className="stat-label flex items-center gap-1">
+              Focus
+              <HelpCircle size={10} className="text-neutral-600 cursor-help shrink-0" title={focusTip} aria-label={focusTip} />
+            </span>
             <span className={`stat-value ${
               liveFocusScore == null   ? 'text-neutral-600' :
               liveFocusScore >= 80    ? 'text-emerald-400' :
@@ -119,7 +124,7 @@ export default function EyeTracker({ controls }) {
       )}
 
       {/* Secondary indicators tucked behind a Details expander to keep the card calm */}
-      {eyeTrackingActive && (
+      {eyeTrackingActive && rhythm && (
         <div className="flex flex-col gap-3">
           <button
             onClick={() => setShowDetails((v) => !v)}
@@ -130,23 +135,14 @@ export default function EyeTracker({ controls }) {
           </button>
 
           {showDetails && (
-            <>
-              {/* Honest framing: this is an estimate, personalized once a baseline exists */}
-              <p className="text-[10px] text-neutral-600 leading-snug">
-                Focus is an estimate from your blink patterns{relState ? ' vs your own baseline' : ''} — affected by dry eyes, lighting & screen distance.
-              </p>
-
-              {/* Blink rhythm indicator */}
-              {rhythm && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3">
-                  <Activity size={12} className={`${rhythm.color} shrink-0`} />
-                  <div className="flex flex-col">
-                    <span className={`text-xs font-medium ${rhythm.color}`}>Rhythm: {rhythm.label}</span>
-                    <span className="text-[10px] text-neutral-600">{rhythm.tip}</span>
-                  </div>
-                </div>
-              )}
-            </>
+            /* Blink rhythm indicator */
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3">
+              <Activity size={12} className={`${rhythm.color} shrink-0`} />
+              <div className="flex flex-col">
+                <span className={`text-xs font-medium ${rhythm.color}`}>Rhythm: {rhythm.label}</span>
+                <span className="text-[10px] text-neutral-600">{rhythm.tip}</span>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -180,7 +176,7 @@ export default function EyeTracker({ controls }) {
       <button
         onClick={eyeTrackingActive ? stopCam : startCam}
         disabled={modelLoading || (!eyeTrackingActive && !modelLoaded)}
-        className={`btn w-full ${
+        className={`btn w-full mt-auto ${
           eyeTrackingActive ? 'btn-danger'
           : !modelLoaded ? 'btn-primary opacity-40 cursor-not-allowed'
           : 'btn-primary'

@@ -25,5 +25,6 @@ export const buildPrefs = (s, extra = {}) => ({
   streak: s.streak,
   bestStreak: s.bestStreak,
   lastSessionDate: s.lastSessionDate,
+  featuresUsed: s.featuresUsed ?? {},
   ...extra,
 })

@@ -16,6 +16,15 @@ export const useStore = create(subscribeWithSelector((set, get) => ({
   prefsSavedAt: 0,
   markPrefsSaved: () => set({ prefsSavedAt: Date.now() }),
 
+  // Feature-discovery flags (persisted via buildPrefs) — powers the Getting Started
+  // checklist for ephemeral actions that aren't otherwise recorded (audio, export).
+  featuresUsed: {},
+  markFeatureUsed: (name) => {
+    const cur = get().featuresUsed || {}
+    if (cur[name]) return // no-op if already set, so autosave doesn't re-fire
+    set({ featuresUsed: { ...cur, [name]: true } })
+  },
+
   ...createPomodoroSlice(set, get),
   ...createEyeTrackerSlice(set, get),
   ...createSessionSlice(set, get),

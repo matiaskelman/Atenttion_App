@@ -7,11 +7,12 @@ import {
 import {
   Clock, Flame, Star, Zap, Download, Smartphone, Sun,
   Trophy, Target, CalendarDays, Layers, Timer, CalendarRange, TrendingDown,
-  Hourglass, TrendingUp, Gauge, Sparkles, Activity
+  Hourglass, TrendingUp, Gauge, Sparkles, Activity, PenLine
 } from 'lucide-react'
 import { AppUsageList, AppAvatar, appDisplayName } from '../AppUsageList'
 import SessionsTable from '../SessionsTable'
 import { formatDuration, formatIsoTime } from '../../utils/format'
+import { buildDailyMap } from '../../utils/sessionStats'
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null
@@ -258,11 +259,9 @@ function ConsistencyCard({ sessions, dailyGoalSeconds }) {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
 
-  const byDate = {}
-  sessions.forEach((s) => {
-    const d = new Date(s.date).toLocaleDateString('en-CA')
-    byDate[d] = (byDate[d] || 0) + (s.duration || 0)
-  })
+  // Per-day totals carry the goal that was active THAT day (snapshot per session),
+  // so changing your goal later doesn't re-color past days.
+  const dayMap = buildDailyMap(sessions, dailyGoalSeconds)
 
   // Grid runs from the Sunday WEEKS-1 weeks ago through the current week, so
   // columns are weeks (oldest→newest) and rows are weekdays (Sun→Sat).
@@ -279,18 +278,20 @@ function ConsistencyCard({ sessions, dailyGoalSeconds }) {
       d.setDate(start.getDate() + w * 7 + dow)
       const iso = d.toLocaleDateString('en-CA')
       const isFuture = d > today
-      const secs = byDate[iso] || 0
+      const day = dayMap[iso]
+      const secs = day?.secs || 0
+      const goal = day?.goal ?? dailyGoalSeconds
       if (!isFuture && secs > 0) activeDays++
-      if (!isFuture && dailyGoalSeconds > 0 && secs >= dailyGoalSeconds) daysHitGoal++
-      col.push({ iso, secs, isFuture, label: d.toLocaleDateString([], { month: 'short', day: 'numeric' }) })
+      if (!isFuture && goal > 0 && secs >= goal) daysHitGoal++
+      col.push({ iso, secs, goal, isFuture, label: d.toLocaleDateString([], { month: 'short', day: 'numeric' }) })
     }
     weeks.push(col)
   }
 
-  const cellClass = (secs, isFuture) => {
-    if (isFuture) return 'bg-transparent'
-    if (secs === 0) return 'bg-surface-3'
-    const pct = dailyGoalSeconds > 0 ? secs / dailyGoalSeconds : 0
+  const cellClass = (cell) => {
+    if (cell.isFuture) return 'bg-transparent'
+    if (cell.secs === 0) return 'bg-surface-3'
+    const pct = cell.goal > 0 ? cell.secs / cell.goal : 0
     if (pct >= 1) return 'bg-violet-500 ring-1 ring-emerald-400/70'
     if (pct >= 0.66) return 'bg-violet-500/70'
     if (pct >= 0.33) return 'bg-violet-500/45'
@@ -310,7 +311,7 @@ function ConsistencyCard({ sessions, dailyGoalSeconds }) {
           <div key={wi} className="flex flex-col gap-1">
             {col.map((cell) => (
               <div key={cell.iso} className="relative group">
-                <div className={`w-3 h-3 rounded-sm ${cellClass(cell.secs, cell.isFuture)}`} />
+                <div className={`w-3 h-3 rounded-sm ${cellClass(cell)}`} />
                 {!cell.isFuture && (
                   <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-10 pointer-events-none">
                     <div className="bg-surface-2 border border-surface-3 rounded px-1.5 py-0.5 text-[9px] text-neutral-400 whitespace-nowrap">
@@ -645,6 +646,52 @@ function WeeklyRecapCard({ sessions }) {
   )
 }
 
+function RecurringIntentionsCard({ sessions }) {
+  const withGoal = sessions.filter((s) => s.goal && s.goal.trim())
+  const map = {}
+  withGoal.forEach((s) => {
+    // Case-insensitive, whitespace-normalized key so "Write essay" == "write  essay".
+    const key = s.goal.trim().toLowerCase().replace(/\s+/g, ' ')
+    if (!map[key]) map[key] = { display: s.goal.trim(), count: 0, scoreSum: 0, scoreCount: 0, flow: 0 }
+    map[key].display = s.goal.trim() // keep the most recent original casing
+    map[key].count += 1
+    if (s.focusScore != null) { map[key].scoreSum += s.focusScore; map[key].scoreCount += 1 }
+    if (s.outcomeRating === 3) map[key].flow += 1
+  })
+  const rows = Object.values(map)
+    .filter((g) => g.count >= 2)
+    .map((g) => ({ display: g.display, count: g.count, flow: g.flow, avg: g.scoreCount ? Math.round(g.scoreSum / g.scoreCount) : null }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6)
+
+  return (
+    <div className="card">
+      <h3 className="text-sm font-semibold text-neutral-300 mb-1 flex items-center gap-2">
+        <PenLine size={13} className="text-violet-400" /> Recurring Intentions
+      </h3>
+      <p className="text-[10px] text-neutral-600 mb-4 leading-snug">
+        Goals you’ve set more than once (case-insensitive), with your average focus score for each.
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-xs text-neutral-600 py-6 text-center">Set the same intention more than once to see patterns here.</p>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          {rows.map((g) => (
+            <div key={g.display} className="flex items-center gap-2.5">
+              <span className="text-xs text-neutral-300 italic truncate flex-1">“{g.display}”</span>
+              {g.flow > 0 && <span className="text-[9px] text-violet-400 shrink-0">{g.flow}× flow</span>}
+              <span className="text-[9px] text-neutral-600 shrink-0">{g.count}×</span>
+              <span className={`text-sm font-semibold w-7 text-right ${
+                g.avg == null ? 'text-neutral-600' : g.avg >= 80 ? 'text-emerald-400' : g.avg >= 50 ? 'text-amber-400' : 'text-red-400'
+              }`}>{g.avg ?? '—'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FocusTrendCard({ sessions }) {
   const DAYS = 56 // ~8 weeks
   const today = new Date()
@@ -753,6 +800,7 @@ export default function StatsPage() {
       if (result?.canceled) {
         setExportMsg(null)
       } else if (result?.success) {
+        useStore.getState().markFeatureUsed('export')
         setExportMsg({ ok: true, text: 'Saved!' })
         setTimeout(() => setExportMsg(null), 3000)
       } else {
@@ -808,7 +856,7 @@ export default function StatsPage() {
           <span className="text-xs text-neutral-500">Total Focus</span>
         </div>
         <div className="card-sm">
-          <Flame size={14} className="text-amber-400 mb-1" />
+          <Zap size={14} className="text-amber-400 mb-1" />
           <span className="text-lg font-semibold text-neutral-100">{sessions.length}</span>
           <span className="text-xs text-neutral-500">Total Sessions</span>
         </div>
@@ -818,7 +866,7 @@ export default function StatsPage() {
           <span className="text-xs text-neutral-500">Avg Score</span>
         </div>
         <div className="card-sm">
-          <Zap size={14} className="text-cyan-400 mb-1" />
+          <Flame size={14} className="text-orange-400 mb-1" />
           <span className="text-lg font-semibold text-neutral-100">{streak ? `${streak}d` : '—'}</span>
           <span className="text-xs text-neutral-500">Streak</span>
           {bestStreak > 0 && (
@@ -859,6 +907,7 @@ export default function StatsPage() {
             <RecordsCard sessions={sessions} bestStreak={bestStreak} />
             <AppsVsFocusCard sessions={sessions} />
           </div>
+          <RecurringIntentionsCard sessions={sessions} />
         </div>
       )}
 

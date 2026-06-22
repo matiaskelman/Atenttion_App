@@ -57,6 +57,9 @@ src/renderer/src/styles/index.css
     .input               — styled text input
     .shadow-violet       — violet glow utility for the play button
   Also sets scrollbar styling, body font (Inter), and background color (#0a0a0a).
+  Animations: `eq-bar`/.animate-eq (audio EQ); `page-in`/.animate-page (page-switch
+  fade/slide, keyed remount in App.jsx); `toast-in`/.animate-toast (GoalToast). A
+  `@media (prefers-reduced-motion: reduce)` block disables animate-page/toast/eq.
 
 ════════════════════════════════════════
 MAIN PROCESS MODULES
@@ -102,8 +105,14 @@ src/renderer/src/store/index.js
     page: 'focus' | 'stats' | 'milestones' | 'system' | 'audios' | 'settings' | 'eyedebug'
     prefsSavedAt / markPrefsSaved() — timestamp set after each autosave write;
       SettingsPage flashes a passive "Saved" indicator off it.
+    featuresUsed {} / markFeatureUsed(name) — persisted feature-discovery flags
+      (e.g. 'audio', 'export') for the Getting Started checklist. markFeatureUsed
+      no-ops if already set (so autosave doesn't re-fire). Carried in buildPrefs;
+      restored by applyPreferences. App.jsx marks 'audio' via an audioPlaying
+      subscription; StatsPage marks 'export' on a successful export.
     (store uses the subscribeWithSelector middleware — App.jsx subscribes with
-     selector+shallow for prefs autosave and the goal-toast crossing detector.)
+     selector+shallow for prefs autosave, the goal-toast crossing detector, and
+     the audio-used flag.)
 
   Preferences (persisted):
     workDuration, shortBreakDuration, longBreakDuration (in seconds)
@@ -129,7 +138,8 @@ src/renderer/src/store/index.js
     sessions[] — last 1000 sessions (mirrors the on-disk cap so Stats/Milestones/
                  export see full history), each: { date, duration, blinkCount,
                  blinkRate, blinkVariability, focusScore, scoreConfidence,
-                 awaySeconds, phonePickups, appUsage{}, and (if ritual) outcomeRating,
+                 awaySeconds, phonePickups, dailyGoalSeconds (snapshot of the goal
+                 in effect that day), appUsage{}, and (if ritual) outcomeRating,
                  goal, moodBefore }
     todayFocusSeconds — running total for today; streak / bestStreak / lastSessionDate
 
@@ -221,7 +231,10 @@ src/renderer/src/components/Pomodoro.jsx
   renders a circular progress ring using strokeDashoffset with a 1s CSS
   transition. Mode badge and color scheme change per mode (violet=work,
   emerald=short-break, cyan=long-break). Session dots show progress toward
-  the 4-session long-break cycle. Controls: reset, play/pause, skip.
+  the 4-session long-break cycle. Controls: reset, play/pause, skip. Reset is a
+  2-step confirm when a session is in progress (running/paused/partly elapsed):
+  first click arms an amber state + inline hint, auto-disarms after 3s, second
+  click resets; immediate when there's no progress.
 
 src/renderer/src/components/EyeTracker.jsx
   Camera start/stop UI + live status display.
@@ -229,8 +242,12 @@ src/renderer/src/components/EyeTracker.jsx
   - Stats row: blink count + BPM (BPM colored red/amber if below thresholds)
   - Blink Rhythm panel: Regular (CV<0.40) / Variable / Irregular with tip text
   - Blink rate health warning: danger (<8 BPM) or caution (<12 BPM) banner
-  - Toggle button: starts getUserMedia stream + face-api loop, or stops both
-  blinkRhythm(cv) and blinkRateStatus(bpm) are pure helper functions for display logic.
+  - Toggle button: starts getUserMedia stream + tracker loop, or stops both
+  (2026-06) Secondary indicators (the "estimate" disclaimer + blink-rhythm box) are
+  tucked behind a "Details" expander (showDetails state) to keep the card calm; the
+  status pill, stats row, feedback nudge, and phone/error banners stay always-visible.
+  Live state label uses findBracket/getRelativeState from blinksConfig (this entry's
+  older blinkRateStatus mention is outdated).
 
   (Settings.jsx was removed in the 2026-06 UX pass — settings now live on their own
    page; see pages/SettingsPage.jsx below.)
@@ -262,19 +279,43 @@ src/renderer/src/components/pages/StatsPage.jsx
     - DeepWorkCard — % of focus time at high/med/low score + week-over-week trend
     - FocusTrendCard — 7-day rolling avg focus over the last 8 weeks (line)
     - DistractionsCard, BestFocusHoursCard, RecordsCard, AppsVsFocusCard
-    - App Activity (focus vs break) + XLSX export
+    - RecurringIntentionsCard — ritual goals set ≥2× (grouped CASE-INSENSITIVELY:
+      trim+lowercase+collapse whitespace) with per-goal avg focus + flow count
+    - App Activity (focus vs break) + XLSX export (marks featuresUsed.export on success)
   Most cards self-gate with a "not enough data yet" state. Scores/variability come
   from session data saved at completion time (not live values).
 
 src/renderer/src/components/pages/MilestonesPage.jsx
-  "Goals" page. 8 MilestoneTrack cards (each: current value, progress bar to the
-  next threshold, badge chips): Focus Hours, Sessions Completed, Active Days,
-  Best Streak, Goal-Hit Streak (consecutive days reaching dailyGoal), Distraction-
-  Free Sessions (0 pickups + 0 away), Flow States (outcomeRating===3), Deep Work
-  Hours (focusScore≥80). Below them, AchievementsCard — one-time badges computed
-  from sessions (Marathon, Early Bird, Night Owl, Deep Diver, Perfect Day,
-  Comeback, Weekend Warrior). NOTE: goal-hit streak / Perfect Day apply the
-  CURRENT dailyGoalSeconds retroactively (per-day goal isn't stored historically).
+  "Goals" page, three sections:
+   1. GettingStartedCard (top) — an 11-item feature-discovery checklist with a
+      progress bar. Items derive from sessions; config-based items LATCH via
+      store.featuresUsed (customTimer / customGoal / focusWallpaper / overlay,
+      marked in SettingsPage when you do the action) so they stay checked even if
+      you later turn the setting off or revert to default — done = currentState ||
+      featuresUsed.flag. Ambient sound + export are pure featuresUsed flags.
+   2. 12 MilestoneTrack cards (current value, progress bar to next threshold, badge
+      chips): Focus Hours, Sessions Completed, Active Days, Best Streak, Goal-Hit
+      Streak, Distraction-Free Sessions, Flow States, Deep Work Hours, Calibration
+      (baselineBpmConfidence — personalizes at 2), Intentions Set, Mornings Focused,
+      Evenings Focused.
+   3. AchievementsCard — 14 one-time badges from computeAchievements(): Marathon,
+      Early Bird, Night Owl, Deep Diver, Laser Focus, Perfect Day, Goal Crusher,
+      Full Focus Day, Mindful Start, Self-Aware (rating matched algorithm bracket
+      5×), Rebound (Flow right after Scattered), Distraction-Free Week, Comeback,
+      Weekend Warrior.
+  NOTE: goal-based items (Goal-Hit Streak, Perfect Day, Goal Crusher, Hit-goal
+  checklist) are measured against each day's OWN goal via utils/sessionStats.js
+  buildDailyMap() — each session snapshots dailyGoalSeconds at completion, so
+  changing your goal no longer rescores history. Only legacy sessions saved before
+  snapshots existed fall back to the current goal. Track accent colors use the full
+  default Tailwind palette (extend.colors keeps it).
+
+src/renderer/src/utils/sessionStats.js
+  buildDailyMap(sessions, currentGoal) → map keyed by local ISO date →
+  { secs, scores[], pickups, count, goal }. Aggregates sessions per day and carries
+  the daily goal active that day (last goal-bearing session of a day wins; sessions
+  without a dailyGoalSeconds snapshot fall back to currentGoal). Used by StatsPage
+  (Consistency) and MilestonesPage (Goal-Hit Streak, achievements, Getting Started).
 
 src/renderer/src/components/pages/SettingsPage.jsx
   Dedicated settings page (replaces the old Settings.jsx card on FocusPage).

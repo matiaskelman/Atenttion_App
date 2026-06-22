@@ -39,6 +39,7 @@ export const createPomodoroSlice = (set) => ({
     streak: prefs.streak ?? 0,
     bestStreak: prefs.bestStreak ?? 0,
     lastSessionDate: prefs.lastSessionDate ?? null,
+    featuresUsed: prefs.featuresUsed ?? {},
     ...(s.pomodoroState === 'idle' ? { timeLeft: prefs.workDuration ?? 25 * 60 } : {})
   })),
 

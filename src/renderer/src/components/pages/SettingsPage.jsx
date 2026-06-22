@@ -76,7 +76,7 @@ export default function SettingsPage() {
     focusWallpaperEnabled, setFocusWallpaperEnabled,
     autoStartEyeTracking, setAutoStartEyeTracking,
     overlayEnabled, setOverlayEnabled,
-    pomodoroState, prefsSavedAt
+    pomodoroState, prefsSavedAt, markFeatureUsed
   } = useStore()
 
   const [paths, setPaths] = useState(null)
@@ -136,7 +136,7 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2">
                 <button
                   disabled={isRunning}
-                  onClick={() => { if (!isRunning) setWorkDuration(workDuration === 30 ? 25 * 60 : 30) }}
+                  onClick={() => { if (!isRunning) { setWorkDuration(workDuration === 30 ? 25 * 60 : 30); markFeatureUsed('customTimer') } }}
                   className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-40 ${workDuration === 30 ? 'border-amber-500 bg-amber-500/10 text-amber-400' : 'border-surface-3 text-neutral-600 hover:border-neutral-600'}`}
                 >
                   30s
@@ -152,21 +152,21 @@ export default function SettingsPage() {
               disabled={isRunning}
               title={isRunning ? 'Stop the timer to change durations' : undefined}
               value={workDuration < 60 ? 1 : Math.round(workDuration / 60)}
-              onChange={(e) => { if (!isRunning) setWorkDuration(Number(e.target.value) * 60) }}
+              onChange={(e) => { if (!isRunning) { setWorkDuration(Number(e.target.value) * 60); markFeatureUsed('customTimer') } }}
               className="w-full h-1 accent-violet-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             />
           </div>
           <MinuteSlider
             label="Short break"
             value={shortBreakDuration}
-            onChange={(v) => { if (!isRunning) setShortBreakDuration(v) }}
+            onChange={(v) => { if (!isRunning) { setShortBreakDuration(v); markFeatureUsed('customTimer') } }}
             min={1} max={30}
             disabled={isRunning}
           />
           <MinuteSlider
             label="Long break"
             value={longBreakDuration}
-            onChange={(v) => { if (!isRunning) setLongBreakDuration(v) }}
+            onChange={(v) => { if (!isRunning) { setLongBreakDuration(v); markFeatureUsed('customTimer') } }}
             min={5} max={60}
             disabled={isRunning}
           />
@@ -178,7 +178,7 @@ export default function SettingsPage() {
               <span className="text-xs text-neutral-400">Daily focus goal</span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setDailyGoalSeconds(dailyGoalSeconds === 30 ? 3600 : 30)}
+                  onClick={() => { setDailyGoalSeconds(dailyGoalSeconds === 30 ? 3600 : 30); markFeatureUsed('customGoal') }}
                   className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${dailyGoalSeconds === 30 ? 'border-amber-500 bg-amber-500/10 text-amber-400' : 'border-surface-3 text-neutral-600 hover:border-neutral-600'}`}
                 >
                   30s
@@ -192,7 +192,7 @@ export default function SettingsPage() {
               type="range"
               min={1} max={12}
               value={dailyGoalSeconds < 3600 ? 1 : Math.round(dailyGoalSeconds / 3600)}
-              onChange={(e) => setDailyGoalSeconds(Number(e.target.value) * 3600)}
+              onChange={(e) => { setDailyGoalSeconds(Number(e.target.value) * 3600); markFeatureUsed('customGoal') }}
               className="w-full h-1 accent-violet-500 cursor-pointer"
             />
           </div>
@@ -240,7 +240,7 @@ export default function SettingsPage() {
             title="Focus wallpaper"
             hint="Dims your desktop during work sessions"
             checked={focusWallpaperEnabled}
-            onChange={() => setFocusWallpaperEnabled(!focusWallpaperEnabled)}
+            onChange={() => { const v = !focusWallpaperEnabled; setFocusWallpaperEnabled(v); if (v) markFeatureUsed('focusWallpaper') }}
           />
         </SettingGroup>
 
@@ -249,7 +249,7 @@ export default function SettingsPage() {
             title="Show floating overlay"
             hint="Small status circle when the app is minimized"
             checked={overlayEnabled}
-            onChange={() => setOverlayEnabled(!overlayEnabled)}
+            onChange={() => { const v = !overlayEnabled; setOverlayEnabled(v); if (v) markFeatureUsed('overlay') }}
           />
         </SettingGroup>
 

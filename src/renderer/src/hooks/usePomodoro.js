@@ -138,6 +138,7 @@ export function usePomodoro() {
             scoreConfidence,
             awaySeconds,
             phonePickups,
+            dailyGoalSeconds: s.dailyGoalSeconds, // snapshot the goal in effect, so history isn't rescored when it changes
             appUsage: { ...s.appUsageFocus }
           }
 
@@ -302,6 +303,7 @@ export function usePomodoro() {
           scoreConfidence,
           awaySeconds,
           phonePickups,
+          dailyGoalSeconds: s.dailyGoalSeconds, // snapshot the goal in effect, so history isn't rescored when it changes
           appUsage: { ...s.appUsageFocus },
           ...(rd ? { ritual: true, goal: rd.goal, moodBefore: rd.moodBefore } : {})
         }
