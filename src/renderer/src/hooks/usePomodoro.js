@@ -114,6 +114,14 @@ export function usePomodoro() {
         return
       }
       const elapsed = (Date.now() - timerStartedAtRef.current) / 1000
+
+      // Free rider: the work session counts UP and never auto-completes. timeLeft holds
+      // elapsed seconds; the session is only recorded on skip/stop or app close.
+      if (s.freeRiderEnabled && s.pomodoroMode === 'work') {
+        s.setTimeLeft(Math.max(0, Math.round(timeLeftAtStartRef.current + elapsed)))
+        return
+      }
+
       const next = Math.max(0, Math.round(timeLeftAtStartRef.current - elapsed))
       if (next > 0 && next <= 10) {
         if (s.pomodoroMode === 'work') playFocusEndTick()
@@ -278,14 +286,15 @@ export function usePomodoro() {
     const s = useStore.getState()
     s.setPomodoroState('idle')
     s.setPomodoroMode('work')
-    s.setTimeLeft(s.workDuration)
+    s.setTimeLeft(s.freeRiderEnabled ? 0 : s.workDuration)
   }, [clearTimer])
 
   const skip = useCallback(() => {
     clearTimer()
     const s = useStore.getState()
     if (s.pomodoroMode === 'work') {
-      const elapsed = s.workDuration - s.timeLeft
+      // Free rider counts up, so elapsed IS timeLeft; a timed session elapsed = total − remaining.
+      const elapsed = s.freeRiderEnabled ? s.timeLeft : s.workDuration - s.timeLeft
       if (elapsed > 60) {
         const cv = s.blinkVariability
         const rd = ritualDataRef.current
@@ -316,6 +325,15 @@ export function usePomodoro() {
           buildPrefs(s, { streak: newStreak3, bestStreak: newBest3, lastSessionDate: today3, ...(learned3 || {}) })
         ).catch(() => {})
       }
+      // Free rider is freeform (not part of the 4-pomodoro cycle): stopping returns to a clean
+      // idle, ready to start the next ride. A timed session skips into its break.
+      if (s.freeRiderEnabled) {
+        s.setPomodoroMode('work')
+        s.setTimeLeft(0)
+        snapshotSessionStart(s)
+        s.setPomodoroState('idle')
+        return
+      }
       const nextCount = s.sessionsCompleted + 1
       if (nextCount % 4 === 0) {
         s.setPomodoroMode('long-break')
@@ -343,6 +361,41 @@ export function usePomodoro() {
   }, [pomodoroState, clearTimer, startTimer])
 
   useEffect(() => clearTimer, [clearTimer])
+
+  // Save an in-progress Free Rider session when the app closes (or the page reloads in dev).
+  // Free rider never auto-completes, so without this a running ride would be lost. Uses a
+  // SYNCHRONOUS IPC save because async writes don't finish during `beforeunload`.
+  useEffect(() => {
+    const handler = () => {
+      const s = useStore.getState()
+      if (!s.freeRiderEnabled || s.pomodoroMode !== 'work') return
+      if (s.pomodoroState !== 'work' && s.pomodoroState !== 'paused') return
+      const elapsed = s.timeLeft // count-up seconds
+      if (elapsed <= 60) return
+      const blinkCount = s.blinkCount - sessionStartBlinkRef.current
+      const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
+      const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
+      const { focusScore, scoreConfidence } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
+      const rd = ritualDataRef.current
+      const sessionData = {
+        date: new Date().toISOString(),
+        duration: elapsed,
+        blinkCount,
+        blinkRate: s.blinkRate,
+        blinkVariability: s.blinkVariability,
+        focusScore,
+        scoreConfidence,
+        awaySeconds,
+        phonePickups,
+        dailyGoalSeconds: s.dailyGoalSeconds,
+        appUsage: { ...s.appUsageFocus },
+        ...(rd ? { ritual: true, goal: rd.goal, moodBefore: rd.moodBefore } : {})
+      }
+      try { window.api?.data.saveSessionSync?.(sessionData) } catch (e) { /* closing anyway */ }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [])
 
   return { start, pause, reset, skip, confirmPreRitual, confirmPostRitual }
 }

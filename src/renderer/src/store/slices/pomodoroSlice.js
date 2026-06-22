@@ -10,8 +10,15 @@ export const createPomodoroSlice = (set) => ({
   overlayEnabled: true,
   baselineBpm: null,          // learned personal engaged blink rate (persisted); null until learned
   baselineBpmConfidence: 0,   // qualifying sessions folded in — relative scoring engages past BASELINE_MIN_CONF
+  freeRiderEnabled: false,    // "Free rider" — work session counts UP indefinitely (no countdown / auto-complete)
   setBaselineBpm: (bpm, conf) => set({ baselineBpm: bpm, baselineBpmConfidence: conf }),
-  setWorkDuration: (v) => set({ workDuration: v, timeLeft: v }),
+  // Toggling Free rider while idle resets the displayed timer: count-up starts at 0, countdown at workDuration.
+  setFreeRiderEnabled: (v) => set((s) => ({
+    freeRiderEnabled: v,
+    ...(s.pomodoroState === 'idle' ? { timeLeft: v ? 0 : s.workDuration } : {})
+  })),
+  // Setting a work duration implies a timed (non-Free-rider) session.
+  setWorkDuration: (v) => set({ workDuration: v, freeRiderEnabled: false, timeLeft: v }),
   setShortBreakDuration: (v) => set({ shortBreakDuration: v }),
   setLongBreakDuration: (v) => set({ longBreakDuration: v }),
   setEyeAwayThreshold: (v) => set({ eyeAwayThresholdMs: v }),
@@ -36,11 +43,12 @@ export const createPomodoroSlice = (set) => ({
     overlayEnabled: prefs.overlayEnabled ?? true,
     baselineBpm: prefs.baselineBpm ?? null,
     baselineBpmConfidence: prefs.baselineBpmConfidence ?? 0,
+    freeRiderEnabled: prefs.freeRiderEnabled ?? false,
     streak: prefs.streak ?? 0,
     bestStreak: prefs.bestStreak ?? 0,
     lastSessionDate: prefs.lastSessionDate ?? null,
     featuresUsed: prefs.featuresUsed ?? {},
-    ...(s.pomodoroState === 'idle' ? { timeLeft: prefs.workDuration ?? 25 * 60 } : {})
+    ...(s.pomodoroState === 'idle' ? { timeLeft: (prefs.freeRiderEnabled ?? false) ? 0 : (prefs.workDuration ?? 25 * 60) } : {})
   })),
 
   // Timer

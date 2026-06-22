@@ -10,6 +10,7 @@
 // won't yet reflect).
 export const buildPrefs = (s, extra = {}) => ({
   workDuration: s.workDuration,
+  freeRiderEnabled: s.freeRiderEnabled,
   shortBreakDuration: s.shortBreakDuration,
   longBreakDuration: s.longBreakDuration,
   eyeAwayThresholdMs: s.eyeAwayThresholdMs,

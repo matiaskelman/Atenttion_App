@@ -108,13 +108,14 @@ All communication goes through `contextBridge` → `window.api`:
 | `system:getIdleMs` | renderer→main | ms since last system-wide keyboard/mouse input (phone typing-veto) |
 | `system:setWallpaper` | renderer→main | Set desktop wallpaper path |
 | `data:saveSession` | renderer→main | Append session to userData markdown |
+| `data:saveSessionSync` | renderer→main (sendSync) | Synchronous session append — flushes a running Free rider session from the renderer's `beforeunload` (async IPC can't finish during window close) |
 | `data:savePreferences` | renderer→main | Write preferences to userData markdown |
 | `data:loadPreferences` | renderer→main | Read preferences from userData on startup |
 
 ### State (Zustand store — `src/renderer/src/store/index.js`)
 Single flat store (uses `subscribeWithSelector` middleware). Key slices:
 - **Navigation:** `page` ('focus'|'stats'|'milestones'|'system'|'audios'|'settings'|'eyedebug'); `prefsSavedAt`/`markPrefsSaved` (autosave feedback); `featuresUsed`/`markFeatureUsed(name)` (persisted feature-discovery flags for the Getting Started checklist — e.g. 'audio', 'export')
-- **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`
+- **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`, `freeRiderEnabled`. **Free rider** = indefinite work: when enabled, the work session counts UP (`timeLeft` holds *elapsed* seconds, the tick adds instead of subtracts) and never auto-completes. Selected via the far-right notch of the work-session slider (steps 1–24 = 5–120 min, notch 25 = Free rider). It's saved only on Skip/Stop (→ idle, not a break) or on app close (`usePomodoro.js` `beforeunload` → `saveSessionSync`).
 - **Eye tracking:** `eyeStatus` ('looking'|'away'|'blinking'|'unknown'), `blinkCount`, `blinkRate`
 - **Sessions:** `sessions[]` (capped at last 1000, aligned with the on-disk cap), `todayFocusSeconds`, `streak`/`bestStreak`. Each session snapshots the `dailyGoalSeconds` in effect when it completed, so goal-based history (Consistency calendar, Goal-Hit Streak, Perfect Day, Goal Crusher) is measured against the goal active *that day*, not the current one. Per-day aggregation: `utils/sessionStats.js` `buildDailyMap(sessions, currentGoal)` (last goal-bearing session of a day wins; legacy sessions without the snapshot fall back to the current goal).
 - **Audio:** `audioPlaying` (null | 'white'|'brown'|'pink'|'lofi'|'lofi2'|'classical'|'classical2')
@@ -163,11 +164,12 @@ On startup, preferences are loaded and applied to the Zustand store. **Preferenc
 ---
 
 ## Preferences That Persist
-- Work duration (default 20 min)
+- Work duration (default 25 min; slider 5–120 min in 5-min steps)
+- `freeRiderEnabled` — "Free rider" indefinite count-up work mode (far-right slider notch)
 - Short break duration (default 5 min)
 - Long break duration (default 15 min)
 - Eye tracking: away threshold, blink threshold
 - `baselineBpm` / `baselineBpmConfidence` — learned per-user engaged blink rate (drives personalized focus scoring)
-- Streak fields, daily goal, ritual/overlay/wallpaper/auto-start toggles
+- Streak fields, daily goal (15 min–8h in 15-min steps), ritual/overlay/wallpaper/auto-start toggles
 
 These are written to `atenttion-preferences.json` (merge-on-write) on every change and read on startup.

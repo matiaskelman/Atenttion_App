@@ -16,6 +16,10 @@ const api = {
   },
   data: {
     saveSession: (session) => ipcRenderer.invoke('data:saveSession', session),
+    // Synchronous save for the `beforeunload` path (async IPC can't finish before the window closes).
+    saveSessionSync: (session) => {
+      try { return ipcRenderer.sendSync('data:saveSessionSync', session) } catch { return { success: false } }
+    },
     savePreferences: (prefs) => ipcRenderer.invoke('data:savePreferences', prefs),
     loadPreferences: () => ipcRenderer.invoke('data:loadPreferences'),
     getSessionsPath: () => ipcRenderer.invoke('data:getSessionsPath'),

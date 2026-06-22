@@ -1,7 +1,7 @@
 import Pomodoro from '../Pomodoro'
 import EyeTracker from '../EyeTracker'
 import { useStore } from '../../store'
-import { Flame, Zap } from 'lucide-react'
+import { Clock, Flame, Zap } from 'lucide-react'
 import { formatDuration } from '../../utils/format'
 
 export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
@@ -12,6 +12,9 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
 
   const pct = Math.min(100, Math.round((todayFocusSeconds / dailyGoalSeconds) * 100))
   const remaining = Math.max(0, dailyGoalSeconds - todayFocusSeconds)
+  // The bar tracks goal progress only, so its numerator never exceeds the goal
+  // (today's *actual* total — which can run past the goal — is shown as its own chip).
+  const goalProgress = Math.min(todayFocusSeconds, dailyGoalSeconds)
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
@@ -36,14 +39,12 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
 
       {/* Compact daily strip — goal progress + today's stats in one row */}
       <div className="mt-5 card flex items-center gap-6">
-        {/* Goal progress (carries today's focus number) */}
+        {/* Goal progress — goal only (capped at the goal) */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-neutral-500">Daily goal</span>
-            <span className="text-xs text-neutral-400">
-              {pct >= 100
-                ? <span className="text-emerald-400 font-medium">{formatDuration(todayFocusSeconds)} · Goal reached!</span>
-                : <>{formatDuration(todayFocusSeconds)} / {formatDuration(dailyGoalSeconds)}</>}
+            <span className={`text-xs ${pct >= 100 ? 'text-emerald-400 font-medium' : 'text-neutral-400'}`}>
+              {formatDuration(dailyGoalSeconds)}{pct >= 100 ? ' · Goal reached!' : ''}
             </span>
           </div>
           <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
@@ -62,6 +63,11 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
 
         {/* Today's stats */}
         <div className="flex items-center gap-6 shrink-0">
+          <div className="flex flex-col items-center">
+            <Clock size={14} className="text-violet-400 mb-1" />
+            <span className="text-lg font-semibold text-neutral-100 leading-none">{formatDuration(todayFocusSeconds)}</span>
+            <span className="text-[10px] text-neutral-500 mt-1">Focus</span>
+          </div>
           <div className="flex flex-col items-center">
             <Zap size={14} className="text-amber-400 mb-1" />
             <span className="text-lg font-semibold text-neutral-100 leading-none">{todaySessions}</span>

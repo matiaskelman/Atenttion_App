@@ -1,5 +1,6 @@
 import { ipcMain, app, dialog } from 'electron'
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import ExcelJS from 'exceljs'
 
@@ -23,12 +24,10 @@ function formatDuration(seconds) {
   return `${m}m ${String(s).padStart(2, '0')}s`
 }
 
-async function appendSession(session) {
-  const filePath = getSessionsPath()
-  await ensureDir(getUserDataPath())
+// Markdown log header + a formatted row for one session — shared by the async and sync writers.
+const SESSIONS_MD_HEADER = `# Atenttion — Session Log\n\n| Date | Time | Duration | Blinks | BPM | Away | Phone |\n|------|------|----------|--------|-----|------|-------|\n`
 
-  const header = `# Atenttion — Session Log\n\n| Date | Time | Duration | Blinks | BPM | Away | Phone |\n|------|------|----------|--------|-----|------|-------|\n`
-
+function sessionMdRow(session) {
   const date = new Date(session.date)
   const dateStr = date.toLocaleDateString('en-CA')
   const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -37,12 +36,36 @@ async function appendSession(session) {
   const bpm = session.blinkRate || 0
   const blinks = session.blinkCount || 0
   const phone = session.phonePickups > 0 ? `${session.phonePickups}×` : '—'
+  return `| ${dateStr} | ${timeStr} | ${duration} | ${blinks} | ${bpm} | ${away} | ${phone} |\n`
+}
 
-  const row = `| ${dateStr} | ${timeStr} | ${duration} | ${blinks} | ${bpm} | ${away} | ${phone} |\n`
-
+async function appendSession(session) {
+  const filePath = getSessionsPath()
+  await ensureDir(getUserDataPath())
   let current = ''
   try { current = await readFile(filePath, 'utf-8') } catch {}
-  await writeFile(filePath, current ? current + row : header + row, 'utf-8')
+  await writeFile(filePath, (current || SESSIONS_MD_HEADER) + sessionMdRow(session), 'utf-8')
+}
+
+// Synchronous twin of appendSession + appendSessionJson, for the `beforeunload` save-on-close path.
+function appendSessionSync(session) {
+  const dir = getUserDataPath()
+  mkdirSync(dir, { recursive: true })
+
+  const mdPath = getSessionsPath()
+  let currentMd = ''
+  try { currentMd = readFileSync(mdPath, 'utf-8') } catch {}
+  writeFileSync(mdPath, (currentMd || SESSIONS_MD_HEADER) + sessionMdRow(session), 'utf-8')
+
+  const jsonPath = getSessionsJsonPath()
+  let sessions = []
+  try {
+    const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'))
+    if (Array.isArray(raw)) sessions = raw
+  } catch {}
+  sessions.push(session)
+  if (sessions.length > 1000) sessions = sessions.slice(-1000)
+  writeFileSync(jsonPath, JSON.stringify(sessions), 'utf-8')
 }
 
 // ─── Preferences ────────────────────────────────────────────────────────────
@@ -199,6 +222,17 @@ export function setupPersistenceIPC() {
       return { success: true }
     } catch (e) {
       return { success: false, error: e.message }
+    }
+  })
+
+  // Synchronous save — used by the renderer's `beforeunload` to flush a running Free Rider
+  // session before the window closes (async IPC would not complete in time).
+  ipcMain.on('data:saveSessionSync', (e, session) => {
+    try {
+      appendSessionSync(session)
+      e.returnValue = { success: true }
+    } catch (err) {
+      e.returnValue = { success: false, error: err.message }
     }
   })
 

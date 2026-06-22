@@ -42,6 +42,15 @@ function MinuteSlider({ label, value, onChange, min = 1, max = 60, accent = 'acc
   )
 }
 
+// Compact goal label: "45m", "1h", "1h 30m", "8h" (and "30s" for the dev test value).
+function goalLabel(secs) {
+  if (secs < 60) return `${secs}s`
+  if (secs < 3600) return `${Math.round(secs / 60)}m`
+  const h = Math.floor(secs / 3600)
+  const m = Math.round((secs % 3600) / 60)
+  return m ? `${h}h ${m}m` : `${h}h`
+}
+
 function SettingGroup({ title, children }) {
   return (
     <div className="card flex flex-col gap-3">
@@ -66,6 +75,7 @@ function ToggleRow({ title, hint, checked, onChange }) {
 export default function SettingsPage() {
   const {
     workDuration, setWorkDuration,
+    freeRiderEnabled, setFreeRiderEnabled,
     shortBreakDuration, setShortBreakDuration,
     longBreakDuration, setLongBreakDuration,
     eyeAwayThresholdMs, setEyeAwayThreshold,
@@ -129,32 +139,44 @@ export default function SettingsPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <SettingGroup title="Timer">
-          {/* Work session — inline to support 30s test shortcut */}
+          {/* Work session — inline to support the 30s test shortcut + Free rider (far-right notch).
+              Slider steps 1..24 map to 5..120 min; the last notch (25) is the indefinite Free rider. */}
           <div className="flex flex-col gap-1.5" title={isRunning ? 'Stop the timer to change durations' : undefined}>
             <div className="flex items-center justify-between">
               <span className={`text-xs ${isRunning ? 'text-neutral-600' : 'text-neutral-400'}`}>Work session</span>
               <div className="flex items-center gap-2">
                 <button
                   disabled={isRunning}
-                  onClick={() => { if (!isRunning) { setWorkDuration(workDuration === 30 ? 25 * 60 : 30); markFeatureUsed('customTimer') } }}
-                  className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-40 ${workDuration === 30 ? 'border-amber-500 bg-amber-500/10 text-amber-400' : 'border-surface-3 text-neutral-600 hover:border-neutral-600'}`}
+                  onClick={() => { if (!isRunning) { setWorkDuration(!freeRiderEnabled && workDuration === 30 ? 25 * 60 : 30); markFeatureUsed('customTimer') } }}
+                  className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors disabled:opacity-40 ${!freeRiderEnabled && workDuration === 30 ? 'border-amber-500 bg-amber-500/10 text-amber-400' : 'border-surface-3 text-neutral-600 hover:border-neutral-600'}`}
                 >
                   30s
                 </button>
-                <span className="text-xs font-mono text-neutral-300 tabular-nums w-16 text-right">
-                  {workDuration < 60 ? `${workDuration}s` : `${Math.round(workDuration / 60)} min`}
+                <span className={`text-xs font-mono tabular-nums w-20 text-right ${freeRiderEnabled ? 'text-violet-400' : 'text-neutral-300'}`}>
+                  {freeRiderEnabled ? 'Free ride' : workDuration < 60 ? `${workDuration}s` : `${Math.round(workDuration / 60)} min`}
                 </span>
               </div>
             </div>
             <input
               type="range"
-              min={1} max={60}
+              min={1} max={25}
               disabled={isRunning}
               title={isRunning ? 'Stop the timer to change durations' : undefined}
-              value={workDuration < 60 ? 1 : Math.round(workDuration / 60)}
-              onChange={(e) => { if (!isRunning) { setWorkDuration(Number(e.target.value) * 60); markFeatureUsed('customTimer') } }}
+              value={freeRiderEnabled ? 25 : workDuration < 60 ? 1 : Math.min(24, Math.max(1, Math.round(workDuration / 300)))}
+              onChange={(e) => {
+                if (isRunning) return
+                const step = Number(e.target.value)
+                if (step >= 25) setFreeRiderEnabled(true)
+                else setWorkDuration(step * 5 * 60)
+                markFeatureUsed('customTimer')
+              }}
               className="w-full h-1 accent-violet-500 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             />
+            {freeRiderEnabled && (
+              <p className="text-[10px] text-violet-400/70 leading-snug">
+                Free rider — works indefinitely (no countdown). The session is saved when you Skip/Stop it or close the app.
+              </p>
+            )}
           </div>
           <MinuteSlider
             label="Short break"
@@ -173,6 +195,7 @@ export default function SettingsPage() {
         </SettingGroup>
 
         <SettingGroup title="Goals & Attention">
+          {/* Daily goal — 15-min steps from 15 min to 8h (slider 1..32 maps to ×15 min). */}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
               <span className="text-xs text-neutral-400">Daily focus goal</span>
@@ -184,15 +207,15 @@ export default function SettingsPage() {
                   30s
                 </button>
                 <span className="text-xs font-mono text-neutral-300 tabular-nums w-16 text-right">
-                  {dailyGoalSeconds < 3600 ? `${dailyGoalSeconds}s` : `${Math.round(dailyGoalSeconds / 3600)}h`}
+                  {goalLabel(dailyGoalSeconds)}
                 </span>
               </div>
             </div>
             <input
               type="range"
-              min={1} max={12}
-              value={dailyGoalSeconds < 3600 ? 1 : Math.round(dailyGoalSeconds / 3600)}
-              onChange={(e) => { setDailyGoalSeconds(Number(e.target.value) * 3600); markFeatureUsed('customGoal') }}
+              min={1} max={32}
+              value={dailyGoalSeconds < 900 ? 1 : Math.min(32, Math.max(1, Math.round(dailyGoalSeconds / 900)))}
+              onChange={(e) => { setDailyGoalSeconds(Number(e.target.value) * 900); markFeatureUsed('customGoal') }}
               className="w-full h-1 accent-violet-500 cursor-pointer"
             />
           </div>

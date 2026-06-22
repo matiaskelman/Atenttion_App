@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Play, Pause, RotateCcw, SkipForward } from 'lucide-react'
+import { Play, Pause, RotateCcw, SkipForward, Infinity as InfinityIcon } from 'lucide-react'
 import { useStore } from '../store'
 import { formatTime } from '../utils/format'
 
@@ -16,13 +16,16 @@ const modeColor = {
 }
 
 export default function Pomodoro({ controls }) {
-  const { pomodoroState, pomodoroMode, timeLeft, workDuration, shortBreakDuration, longBreakDuration, sessionsCompleted } = useStore()
+  const { pomodoroState, pomodoroMode, timeLeft, workDuration, shortBreakDuration, longBreakDuration, sessionsCompleted, freeRiderEnabled } = useStore()
   const { start, pause, reset, skip } = controls
+
+  // Free rider: the work session counts UP indefinitely, so there's no fixed total or progress arc.
+  const isFreeRiderWork = freeRiderEnabled && pomodoroMode === 'work'
 
   const totalDuration = pomodoroMode === 'work' ? workDuration :
     pomodoroMode === 'short-break' ? shortBreakDuration : longBreakDuration
 
-  const progress = 1 - timeLeft / totalDuration
+  const progress = isFreeRiderWork ? 0 : 1 - timeLeft / totalDuration
   const isRunning = pomodoroState === 'work' || pomodoroState === 'break'
   const colors = modeColor[pomodoroMode]
 
@@ -30,7 +33,7 @@ export default function Pomodoro({ controls }) {
   // partially elapsed) so an accidental click can't silently wipe it.
   const [confirmReset, setConfirmReset] = useState(false)
   const confirmTimerRef = useRef(null)
-  const hasProgress = isRunning || pomodoroState === 'paused' || progress > 0
+  const hasProgress = isRunning || pomodoroState === 'paused' || (isFreeRiderWork ? timeLeft > 0 : progress > 0)
 
   const handleReset = () => {
     if (!hasProgress) { reset(); return }
@@ -54,8 +57,9 @@ export default function Pomodoro({ controls }) {
   return (
     <div className="card flex flex-col items-center justify-center h-full gap-6 py-8">
       {/* Mode badge */}
-      <span className={`text-xs font-semibold px-3 py-1 rounded-full ${colors.badge}`}>
-        {modeLabel[pomodoroMode]}
+      <span className={`text-xs font-semibold px-3 py-1 rounded-full inline-flex items-center gap-1 ${colors.badge}`}>
+        {isFreeRiderWork && <InfinityIcon size={12} />}
+        {isFreeRiderWork ? 'Free Ride' : modeLabel[pomodoroMode]}
       </span>
 
       {/* Ring + Timer */}
@@ -66,14 +70,15 @@ export default function Pomodoro({ controls }) {
             cx={size / 2} cy={size / 2} r={radius}
             fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={strokeWidth}
           />
-          {/* Progress */}
+          {/* Progress — for Free rider, a full breathing ring stands in for the (nonexistent) countdown */}
           <circle
             cx={size / 2} cy={size / 2} r={radius}
             fill="none" stroke={colors.ring} strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeDasharray={circumference}
-            strokeDashoffset={offset}
-            style={{ transition: 'stroke-dashoffset 1s linear', filter: `drop-shadow(0 0 8px ${colors.glow})` }}
+            strokeDashoffset={isFreeRiderWork ? 0 : offset}
+            className={isFreeRiderWork && isRunning ? 'animate-pulse' : ''}
+            style={{ transition: 'stroke-dashoffset 1s linear', filter: `drop-shadow(0 0 8px ${colors.glow})`, opacity: isFreeRiderWork ? 0.5 : 1 }}
           />
         </svg>
 
@@ -81,8 +86,12 @@ export default function Pomodoro({ controls }) {
           <span className="font-mono text-5xl font-semibold tracking-tight text-neutral-100">
             {formatTime(timeLeft)}
           </span>
-          <span className="text-xs text-neutral-500">
-            {pomodoroState === 'paused' ? 'Paused' : isRunning ? 'Running' : 'Ready'}
+          <span className="text-xs text-neutral-500 flex items-center gap-1">
+            {pomodoroState === 'paused'
+              ? 'Paused'
+              : isFreeRiderWork
+                ? <><InfinityIcon size={12} /> {isRunning ? 'Free ride' : 'Ready'}</>
+                : isRunning ? 'Running' : 'Ready'}
           </span>
         </div>
       </div>
