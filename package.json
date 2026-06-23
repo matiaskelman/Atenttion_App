@@ -72,7 +72,7 @@
         "provider": "github",
         "owner": "matiaskelman",
         "repo": "Atenttion_App",
-        "draft": false
+        "releaseType": "release"
       }
     ]
   }
