@@ -66,11 +66,11 @@ export function usePomodoro() {
     const durCount = Math.max(0, s.blinkDurCount - start.blinkDurCount)
     const durSum = Math.max(0, s.blinkDurSumMs - start.blinkDurSumMs)
     const meanClosureMs = durCount > 0 ? durSum / durCount : 0
-    const { score, confidence } = computeSessionScore({
+    const { score, confidence, breakdown } = computeSessionScore({
       cognitiveAvg, cogSamples, awaySeconds, phonePickups,
       duration, presentSeconds: presentMs / 1000, blinkCount, perclos, meanClosureMs
     })
-    return { focusScore: score, scoreConfidence: confidence }
+    return { focusScore: score, scoreConfidence: confidence, scoreBreakdown: breakdown }
   }
 
   // Learn the user's own engaged blink baseline from a completed session and persist it (EMA across
@@ -135,7 +135,7 @@ export function usePomodoro() {
           const blinkCount = s.blinkCount - sessionStartBlinkRef.current
           const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
           const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
-          const { focusScore, scoreConfidence } = buildSessionScore(s, s.workDuration, blinkCount, awaySeconds, phonePickups)
+          const { focusScore, scoreConfidence, scoreBreakdown } = buildSessionScore(s, s.workDuration, blinkCount, awaySeconds, phonePickups)
           const sessionData = {
             date: new Date().toISOString(),
             duration: s.workDuration,
@@ -144,6 +144,7 @@ export function usePomodoro() {
             blinkVariability: cv,
             focusScore,
             scoreConfidence,
+            scoreBreakdown,
             awaySeconds,
             phonePickups,
             dailyGoalSeconds: s.dailyGoalSeconds, // snapshot the goal in effect, so history isn't rescored when it changes
@@ -159,6 +160,7 @@ export function usePomodoro() {
               moodBefore: rd?.moodBefore ?? s.ritualMoodBefore,
             }
             s.setTimeLeft(0)  // Show work is done while feedback modal is open
+            s.setPendingSessionScore(focusScore)  // freeze the earned score for the survey display
             s.setRitualPhase('post')
             s.setShowRitualModal(true)
             // Break transition happens in confirmPostRitual
@@ -236,6 +238,7 @@ export function usePomodoro() {
     ).catch(() => {})
     lastSessionEndedAtRef.current = Date.now()
     s.setShowRitualModal(false)
+    s.setPendingSessionScore(null)  // survey closed — drop the frozen score
     // ritualDataRef kept alive so consecutive block sessions inherit the same goal+mood
 
     notify('Atenttion', 'Work session complete! Take a break.')
@@ -287,6 +290,7 @@ export function usePomodoro() {
     s.setPomodoroState('idle')
     s.setPomodoroMode('work')
     s.setTimeLeft(s.freeRiderEnabled ? 0 : s.workDuration)
+    s.setPendingSessionScore(null)
   }, [clearTimer])
 
   const skip = useCallback(() => {
@@ -301,7 +305,7 @@ export function usePomodoro() {
         const blinkCount = s.blinkCount - sessionStartBlinkRef.current
         const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
         const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
-        const { focusScore, scoreConfidence } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
+        const { focusScore, scoreConfidence, scoreBreakdown } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
         const sessionData = {
           date: new Date().toISOString(),
           duration: elapsed,
@@ -310,6 +314,7 @@ export function usePomodoro() {
           blinkVariability: cv,
           focusScore,
           scoreConfidence,
+          scoreBreakdown,
           awaySeconds,
           phonePickups,
           dailyGoalSeconds: s.dailyGoalSeconds, // snapshot the goal in effect, so history isn't rescored when it changes
@@ -375,7 +380,7 @@ export function usePomodoro() {
       const blinkCount = s.blinkCount - sessionStartBlinkRef.current
       const awaySeconds = s.totalLookingAwaySeconds - awayStartRef.current
       const phonePickups = s.phonePickupsTotal - phonePickupsStartRef.current
-      const { focusScore, scoreConfidence } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
+      const { focusScore, scoreConfidence, scoreBreakdown } = buildSessionScore(s, elapsed, blinkCount, awaySeconds, phonePickups)
       const rd = ritualDataRef.current
       const sessionData = {
         date: new Date().toISOString(),
@@ -385,6 +390,7 @@ export function usePomodoro() {
         blinkVariability: s.blinkVariability,
         focusScore,
         scoreConfidence,
+        scoreBreakdown,
         awaySeconds,
         phonePickups,
         dailyGoalSeconds: s.dailyGoalSeconds,

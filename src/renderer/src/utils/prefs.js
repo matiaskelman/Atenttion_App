@@ -27,5 +27,9 @@ export const buildPrefs = (s, extra = {}) => ({
   bestStreak: s.bestStreak,
   lastSessionDate: s.lastSessionDate,
   featuresUsed: s.featuresUsed ?? {},
+  tasks: s.tasks ?? [],
+  tasksCompletedTotal: s.tasksCompletedTotal ?? 0,
+  tasksCompletedOnTime: s.tasksCompletedOnTime ?? 0,
+  onboardingCompleted: s.onboardingCompleted ?? false,
   ...extra,
 })

@@ -1,7 +1,8 @@
 import {
   Trophy, Clock, Layers, Flame, Gauge, Target, ShieldCheck, Sparkles, CalendarDays,
   Timer, Sunrise, Sunset, Moon, Star, Gem, Undo2, CalendarHeart, Brain, PenLine,
-  Compass, CheckCircle2, Circle, Crosshair, Eye, Sun, Rocket, Shield, Crown, Coffee
+  Compass, CheckCircle2, Circle, Crosshair, Eye, Sun, Rocket, Shield, Crown, Coffee,
+  ListChecks, CalendarCheck, CalendarClock, Zap, Inbox
 } from 'lucide-react'
 import { useStore } from '../../store'
 import { formatDuration } from '../../utils/format'
@@ -49,7 +50,7 @@ function MilestoneTrack({ icon: Icon, title, hint, current, valueLabel, mileston
   )
 }
 
-function computeAchievements(sessions, dailyGoalSeconds) {
+function computeAchievements(sessions, dailyGoalSeconds, task = {}) {
   const hasSession = new Set(sessions.map((s) => new Date(s.date).toLocaleDateString('en-CA')))
   // Per-day map carries each day's own goal (snapshot per session) — goal-based
   // achievements are measured against the goal that was active that day.
@@ -139,6 +140,10 @@ function computeAchievements(sessions, dailyGoalSeconds) {
     { icon: Shield, label: 'Distraction-Free Week', desc: '7 days, 0 phone pickups', earned: distractionFreeWeek },
     { icon: Undo2, label: 'Comeback', desc: 'Returned after a 7-day gap', earned: comeback },
     { icon: CalendarHeart, label: 'Weekend Warrior', desc: 'Focused Sat & Sun', earned: weekendWarrior },
+    { icon: CheckCircle2, label: 'First Win', desc: 'Completed your first task', earned: (task.total || 0) >= 1 },
+    { icon: Zap, label: 'Beat the Clock', desc: 'Finished a task before its due date', earned: (task.onTime || 0) >= 1 },
+    { icon: CalendarClock, label: 'Planner', desc: 'Gave a task a deadline', earned: !!task.featuresUsed?.taskDue },
+    { icon: Inbox, label: 'Clean Slate', desc: 'Cleared a full to-do list', earned: !!task.featuresUsed?.cleanSlate },
   ]
 }
 
@@ -156,6 +161,8 @@ function GettingStartedCard({ sessions, dailyGoalSeconds, workDuration, focusWal
     { label: 'Set a session intention', done: sessions.some((s) => (s.goal && s.goal.trim()) || s.ritual) },
     { label: 'Rate a session afterward', done: sessions.some((s) => s.outcomeRating != null) },
     { label: 'Hit your daily goal', done: dayHitGoal },
+    { label: 'Add your first task', done: !!featuresUsed?.task },
+    { label: 'Give a task a due date', done: !!featuresUsed?.taskDue },
     { label: 'Personalize your timer', done: workDuration !== 25 * 60 || !!featuresUsed?.customTimer },
     { label: 'Set your own daily goal', done: dailyGoalSeconds !== 4 * 3600 || !!featuresUsed?.customGoal },
     { label: 'Turn on Focus Wallpaper', done: !!focusWallpaperEnabled || !!featuresUsed?.focusWallpaper },
@@ -166,8 +173,13 @@ function GettingStartedCard({ sessions, dailyGoalSeconds, workDuration, focusWal
   const done = items.filter((i) => i.done).length
   const pct = Math.round((done / items.length) * 100)
 
+  // Once every item is checked the checklist has served its purpose — retire it so
+  // the Goals page stays focused on long-term milestones. (The onboarding tour, not
+  // this card, is the first-run guide; this is the at-your-own-pace follow-up.)
+  if (done === items.length) return null
+
   return (
-    <div className="card mb-4">
+    <div data-tour="getting-started" className="card mb-4">
       <h3 className="text-sm font-semibold text-neutral-300 mb-1 flex items-center gap-2">
         <Compass size={13} className="text-violet-400" /> Getting Started
         <span className="text-[10px] text-neutral-600 font-normal ml-auto">{done}/{items.length} explored</span>
@@ -190,8 +202,8 @@ function GettingStartedCard({ sessions, dailyGoalSeconds, workDuration, focusWal
   )
 }
 
-function AchievementsCard({ sessions, dailyGoalSeconds }) {
-  const badges = computeAchievements(sessions, dailyGoalSeconds)
+function AchievementsCard({ sessions, dailyGoalSeconds, task }) {
+  const badges = computeAchievements(sessions, dailyGoalSeconds, task)
   const earned = badges.filter((b) => b.earned).length
 
   return (
@@ -229,6 +241,8 @@ export default function MilestonesPage() {
   const focusWallpaperEnabled = useStore((s) => s.focusWallpaperEnabled)
   const overlayEnabled = useStore((s) => s.overlayEnabled)
   const featuresUsed = useStore((s) => s.featuresUsed)
+  const tasksCompletedTotal = useStore((s) => s.tasksCompletedTotal)
+  const tasksCompletedOnTime = useStore((s) => s.tasksCompletedOnTime)
 
   const totalSecs = sessions.reduce((a, s) => a + (s.duration || 0), 0)
   const deepSecs = sessions.reduce((a, s) => a + (s.focusScore != null && s.focusScore >= 80 ? (s.duration || 0) : 0), 0)
@@ -394,6 +408,28 @@ export default function MilestonesPage() {
       remainingLabel: (diff, next) => `${Math.ceil(diff)} more to your ${next}-evening badge`,
       accent: { icon: 'text-sky-400', bar: 'bg-sky-500', chip: 'border-sky-500/40 bg-sky-500/10 text-sky-300' },
     },
+    {
+      icon: ListChecks,
+      title: 'Tasks Completed',
+      hint: 'To-dos you’ve checked off (lifetime — survives clearing)',
+      current: tasksCompletedTotal || 0,
+      valueLabel: `${tasksCompletedTotal || 0}`,
+      milestones: [1, 10, 25, 50, 100, 250, 500],
+      milestoneLabel: (m) => `${m}`,
+      remainingLabel: (diff, next) => `${Math.ceil(diff)} more to your ${next}-task badge`,
+      accent: { icon: 'text-lime-400', bar: 'bg-lime-500', chip: 'border-lime-500/40 bg-lime-500/10 text-lime-300' },
+    },
+    {
+      icon: CalendarCheck,
+      title: 'On-Time Finishes',
+      hint: 'Tasks completed on or before their due date',
+      current: tasksCompletedOnTime || 0,
+      valueLabel: `${tasksCompletedOnTime || 0}`,
+      milestones: [1, 5, 25, 50, 100],
+      milestoneLabel: (m) => `${m}`,
+      remainingLabel: (diff, next) => `${Math.ceil(diff)} more to your ${next}-task badge`,
+      accent: { icon: 'text-green-400', bar: 'bg-green-500', chip: 'border-green-500/40 bg-green-500/10 text-green-300' },
+    },
   ]
 
   return (
@@ -421,7 +457,11 @@ export default function MilestonesPage() {
         ))}
       </div>
 
-      <AchievementsCard sessions={sessions} dailyGoalSeconds={dailyGoalSeconds} />
+      <AchievementsCard
+        sessions={sessions}
+        dailyGoalSeconds={dailyGoalSeconds}
+        task={{ total: tasksCompletedTotal, onTime: tasksCompletedOnTime, featuresUsed }}
+      />
     </div>
   )
 }

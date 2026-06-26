@@ -189,6 +189,14 @@ export function useEyeTracker(videoRef) {
       return
     }
 
+    // Survey open: the session is over and its score is already saved. Freeze all live measurement
+    // so the readouts the user just earned stop moving, and so auto-pause/auto-resume can't flip
+    // pomodoroState (which would re-trigger session completion with timeLeft === 0).
+    if (s.showRitualModal && s.ritualPhase === 'post') {
+      rafRef.current = setTimeout(runFrame, 100)
+      return
+    }
+
     try {
       const result = landmarker.detectForVideo(video, Date.now())
       const lm = result.faceLandmarks?.[0]

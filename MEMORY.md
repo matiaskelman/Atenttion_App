@@ -16,6 +16,16 @@ Add entries at the top of each section. Keep entries concise.
 
 ## Decisions Made
 
+### 2026-06-23 — Freeze tracker + show saved score during the post-session survey
+While the post-ritual "Session complete" survey was open, the Eye Tracking card's live Focus/BPM/Blinks kept moving — making it look like the score was still being computed while the user answered. (The *saved* session score was already frozen at session-end in `usePomodoro.js` → `pendingSessionRef.current`; `confirmPostRitual` only attaches the outcome rating. Only the live display moved.) Fix:
+1. **Store** — new `pendingSessionScore` (+ `setPendingSessionScore`) in `pomodoroSlice.js`, next to the ritual fields. Holds the frozen Focus Score of the just-completed session while the survey is open; `null` otherwise.
+2. **`usePomodoro.js`** — set it to `focusScore` in the ritual-completion branch (when opening the post modal); clear to `null` in `confirmPostRitual` and `reset`.
+3. **`useEyeTracker.js`** — `runFrame` now early-returns (just re-schedules at 100ms) while `showRitualModal && ritualPhase === 'post'`, freezing all measurement. `dt` is already clamped to ≤200ms so the first frame after the survey can't inject a gap into the accumulators.
+4. **`EyeTracker.jsx`** — during the survey the Focus stat shows `pendingSessionScore` (label switches "Focus"→"Session") instead of the live score.
+**Side benefit (latent bug closed):** gating `runFrame` stops the tracker auto-pause→auto-resume from flipping `pomodoroState` back to `'work'` during the survey, which previously hit the `useEffect` at `usePomodoro.js` ~L358 and re-completed the session with `timeLeft === 0` (a second survey).
+**Why:** the perceived "score still changing" eroded trust in the number; the survey is post-session, so the tracker should be inert and the card should display the earned result.
+**Verified:** full `electron-vite build` clean. Live camera end-to-end still pending.
+
 ### 2026-06-16 — Focus Score redesign (reliability)
 The Focus Score was unreliable: it saved a single **final-minute snapshot** of `computeFocusScore(blinkRate, cv)` at timer-zero and **ignored away-time and phone pickups entirely** (a user could look away or grab their phone repeatedly and still score 100). Redesigned into a two-layer score:
 1. **Instantaneous cognitive score** — `computeFocusScore(bpm, cv)` is unchanged (rate 55% + rhythm 45%), still drives the live banner.

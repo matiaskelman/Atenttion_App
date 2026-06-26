@@ -94,5 +94,17 @@ export function computeSessionScore({
     || blinkCount < SCORE_CONFIG.LOWCONF_BLINKS
     || awayFraction > SCORE_CONFIG.AWAY_HIGH_THRESHOLD
 
-  return { score, confidence: lowConfidence ? 'low' : 'high' }
+  // The factors that produced the score, kept so a session can later explain *why* it scored what
+  // it did (the per-session "Why this score?" breakdown). The blink-focus base is the only positive;
+  // every factor ≤ 1 can only subtract. We persist the factors, not the raw PERCLOS/closure/curve
+  // inputs, so the explanation never leaks tuning internals.
+  const breakdown = {
+    base: Math.round(cognitiveAvg),
+    presence: presenceFactor,
+    phone: phoneFactor,
+    drift: driftFactor,
+    fatigue: fatigueFactor
+  }
+
+  return { score, confidence: lowConfidence ? 'low' : 'high', breakdown }
 }

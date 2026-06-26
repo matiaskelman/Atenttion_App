@@ -19,8 +19,10 @@ export const createPomodoroSlice = (set) => ({
   })),
   // Setting a work duration implies a timed (non-Free-rider) session.
   setWorkDuration: (v) => set({ workDuration: v, freeRiderEnabled: false, timeLeft: v }),
-  setShortBreakDuration: (v) => set({ shortBreakDuration: v }),
-  setLongBreakDuration: (v) => set({ longBreakDuration: v }),
+  // The long break can never be shorter than the short break: raising the short break drags the
+  // long break up with it, and the long break clamps to at least the short break.
+  setShortBreakDuration: (v) => set((s) => ({ shortBreakDuration: v, longBreakDuration: Math.max(s.longBreakDuration, v) })),
+  setLongBreakDuration: (v) => set((s) => ({ longBreakDuration: Math.max(v, s.shortBreakDuration) })),
   setEyeAwayThreshold: (v) => set({ eyeAwayThresholdMs: v }),
   setNotifyOnAutoPause: (v) => set({ notifyOnAutoPause: v }),
   setSoundOnAutoPause: (v) => set({ soundOnAutoPause: v }),
@@ -32,7 +34,8 @@ export const createPomodoroSlice = (set) => ({
   applyPreferences: (prefs) => set((s) => ({
     workDuration: prefs.workDuration ?? 25 * 60,
     shortBreakDuration: prefs.shortBreakDuration ?? 5 * 60,
-    longBreakDuration: prefs.longBreakDuration ?? 15 * 60,
+    // Long break is always at least the short break (clamp legacy prefs that predate this rule).
+    longBreakDuration: Math.max(prefs.longBreakDuration ?? 15 * 60, prefs.shortBreakDuration ?? 5 * 60),
     eyeAwayThresholdMs: prefs.eyeAwayThresholdMs ?? 5000,
     notifyOnAutoPause: prefs.notifyOnAutoPause ?? true,
     soundOnAutoPause: prefs.soundOnAutoPause ?? false,
@@ -48,6 +51,10 @@ export const createPomodoroSlice = (set) => ({
     bestStreak: prefs.bestStreak ?? 0,
     lastSessionDate: prefs.lastSessionDate ?? null,
     featuresUsed: prefs.featuresUsed ?? {},
+    tasks: prefs.tasks ?? [],
+    tasksCompletedTotal: prefs.tasksCompletedTotal ?? 0,
+    tasksCompletedOnTime: prefs.tasksCompletedOnTime ?? 0,
+    onboardingCompleted: prefs.onboardingCompleted ?? false,
     ...(s.pomodoroState === 'idle' ? { timeLeft: (prefs.freeRiderEnabled ?? false) ? 0 : (prefs.workDuration ?? 25 * 60) } : {})
   })),
 
@@ -69,10 +76,15 @@ export const createPomodoroSlice = (set) => ({
   ritualPhase: 'pre', // 'pre' | 'post'
   ritualGoal: '',
   ritualMoodBefore: null,
+  // Frozen Focus Score of the just-completed session, shown in the Eye Tracking card while the
+  // post-session survey is open so the user sees the result they earned (not the still-moving live
+  // score). null at all other times.
+  pendingSessionScore: null,
   setShowRitualModal: (v) => set(v
     ? { showRitualModal: true, phoneUseExpected: null, phoneDetected: false }
     : { showRitualModal: false }),
   setRitualPhase: (v) => set({ ritualPhase: v }),
+  setPendingSessionScore: (v) => set({ pendingSessionScore: v }),
   setRitualGoal: (v) => set({ ritualGoal: v }),
   setRitualMoodBefore: (v) => set({ ritualMoodBefore: v }),
 

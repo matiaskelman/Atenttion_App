@@ -73,9 +73,11 @@ src/
             ├── Sidebar.jsx           Nav + status dots (pomodoro, audio playing); Settings pinned bottom
             ├── Pomodoro.jsx          SVG ring timer + controls (reset is 2-step confirm mid-session)
             ├── EyeTracker.jsx        Camera start/stop + status display (secondary indicators behind a Details expander)
+            ├── Tasks.jsx             Right-column to-do card under EyeTracker on the Focus page — add tasks + optional per-task "due" date (urgency-coloured), check off, delete, clear-done, completion progress bar, open/Done split; fills the column so its bottom aligns with the timer. Persisted via prefs (`tasks` array). Exports `dueInfo` (reused by the ritual goal suggestions)
+            ├── DueDatePicker.jsx     Custom due-date picker popover (quick presets + mini month calendar) used by Tasks; renders in a body portal (fixed-positioned, escapes the scrollable list), closes on outside-click/Esc/scroll
             ├── GoalToast.jsx         Trophy toast shown when daily focus goal is crossed
             └── pages/
-                ├── FocusPage.jsx     Main view: Pomodoro + EyeTracker + daily stats
+                ├── FocusPage.jsx     Main view: timer hero (Pomodoro) + right column (EyeTracker over Tasks) + compact daily strip (goal bar + Focus/Sessions/Streak chips)
                 ├── StatsPage.jsx     recharts dashboard — Weekly Recap, Consistency heatmap, Optimal Duration, Focus Stamina, Deep Work, Focus Trend, Records, Apps-vs-Focus, Recurring Intentions, Distractions, Best Hours, app activity, XLSX export
                 ├── MilestonesPage.jsx  "Goals" — Getting Started discovery checklist + 12 milestone tracks (progress bars + badge chips) + 15 Achievement badges
                 ├── SettingsPage.jsx  Dedicated settings page (moved out of FocusPage); grouped cards; autosave indicator
@@ -115,9 +117,9 @@ All communication goes through `contextBridge` → `window.api`:
 ### State (Zustand store — `src/renderer/src/store/index.js`)
 Single flat store (uses `subscribeWithSelector` middleware). Key slices:
 - **Navigation:** `page` ('focus'|'stats'|'milestones'|'system'|'audios'|'settings'|'eyedebug'); `prefsSavedAt`/`markPrefsSaved` (autosave feedback); `featuresUsed`/`markFeatureUsed(name)` (persisted feature-discovery flags for the Getting Started checklist — e.g. 'audio', 'export')
-- **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`, `freeRiderEnabled`. **Free rider** = indefinite work: when enabled, the work session counts UP (`timeLeft` holds *elapsed* seconds, the tick adds instead of subtracts) and never auto-completes. Selected via the far-right notch of the work-session slider (steps 1–24 = 5–120 min, notch 25 = Free rider). It's saved only on Skip/Stop (→ idle, not a break) or on app close (`usePomodoro.js` `beforeunload` → `saveSessionSync`).
+- **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`, `freeRiderEnabled`. **Free rider** = indefinite work: when enabled, the work session counts UP (`timeLeft` holds *elapsed* seconds, the tick adds instead of subtracts) and never auto-completes. Selected via the far-right notch of the work-session slider (steps 1–24 = 5–120 min, notch 25 = Free rider). It's saved only on Skip/Stop (→ idle, not a break) or on app close (`usePomodoro.js` `beforeunload` → `saveSessionSync`). **Ritual/survey:** `showRitualModal` + `ritualPhase` ('pre'|'post'); `pendingSessionScore` holds the frozen Focus Score of the just-completed session while the post-session survey is open (set in the ritual-completion branch of `usePomodoro.js`, cleared in `confirmPostRitual`/`reset`). While that survey is open the eye-tracker `runFrame` early-returns (freezes all live measurement) so the score the user earned stops moving AND the tracker can't flip `pomodoroState` back to `'work'` and re-complete the session; the EyeTracker card shows `pendingSessionScore` (label "Session") in place of the live score.
 - **Eye tracking:** `eyeStatus` ('looking'|'away'|'blinking'|'unknown'), `blinkCount`, `blinkRate`
-- **Sessions:** `sessions[]` (capped at last 1000, aligned with the on-disk cap), `todayFocusSeconds`, `streak`/`bestStreak`. Each session snapshots the `dailyGoalSeconds` in effect when it completed, so goal-based history (Consistency calendar, Goal-Hit Streak, Perfect Day, Goal Crusher) is measured against the goal active *that day*, not the current one. Per-day aggregation: `utils/sessionStats.js` `buildDailyMap(sessions, currentGoal)` (last goal-bearing session of a day wins; legacy sessions without the snapshot fall back to the current goal).
+- **Sessions:** `sessions[]` (capped at last 1000, aligned with the on-disk cap), `todayFocusSeconds`, `streak`/`bestStreak`. Each session snapshots the `dailyGoalSeconds` in effect when it completed, so goal-based history (Consistency calendar, Goal-Hit Streak, Perfect Day, Goal Crusher) is measured against the goal active *that day*, not the current one. Per-day aggregation: `utils/sessionStats.js` `buildDailyMap(sessions, currentGoal)` (last goal-bearing session of a day wins; legacy sessions without the snapshot fall back to the current goal). Sessions completed after the Focus-Score-breakdown change also carry `scoreBreakdown` (`{ base, presence, phone, drift, fatigue }` — the blink-focus base + the four penalty factors that produced the score), surfaced as the per-session **"Why this score?"** +/− ledger in the expanded Sessions-table row (`utils/scoreBreakdown.js` `explainScore` → `SessionsTable.jsx`). Older sessions lack it and show a "breakdown not available" note.
 - **Audio:** `audioPlaying` (null | 'white'|'brown'|'pink'|'lofi'|'lofi2'|'classical'|'classical2')
 
 ### Eye Tracking Pipeline
@@ -134,6 +136,8 @@ The score is presented as an **estimate**, and is **personalized**: once a per-u
 - `src/renderer/src/constants/blinksConfig.js` — `BPM_BRACKETS`, `REL_RATE_CURVE`, `getRelativeState`, `SCORE_CONFIG`
 - `src/renderer/src/utils/focusScore.js` — `computeFocusScore()` + `computeSessionScore()`
 - `src/renderer/src/components/EyeTracker.jsx` — live state label (`getRelativeState` / fallback bracket) + the "estimate" disclaimer
+
+**Per-session "Why this score?" breakdown:** `computeSessionScore` returns the factors that produced the score in a `breakdown` object; `usePomodoro.js` persists them on each session as `scoreBreakdown`. `utils/scoreBreakdown.js` `explainScore(session)` turns those factors into a +/− ledger (earned blink-focus `+base`, then a `−N` line per penalty that cost points, reconciling to the stored final). In `SessionsTable.jsx` `ScoreBreakdown` renders it as a **composition bar** (green kept + impact-graded red lost out of 100, faint tail = headroom) over an icon ledger, shown **first** in the expanded row (it's the headline — not buried below the goal/apps/metrics, which sit under a divider). A "Tap a session to see why it scored what it did" hint under the Sessions header aids discovery. **Keep the ledger honest but opaque:** it shows real-world values, qualitative impact and rounded point costs — never the multiplier constants, weights, PERCLOS %/closure-ms or the formula. Changing the scoring factors means updating `explainScore`'s labels/summary too.
 
 ### Model Loading (Production)
 Models are at `src/renderer/public/models/` (gitignored, generated by `npm install`).
@@ -167,9 +171,10 @@ On startup, preferences are loaded and applied to the Zustand store. **Preferenc
 - Work duration (default 25 min; slider 5–120 min in 5-min steps)
 - `freeRiderEnabled` — "Free rider" indefinite count-up work mode (far-right slider notch)
 - Short break duration (default 5 min)
-- Long break duration (default 15 min)
+- Long break duration (default 15 min) — always ≥ short break (enforced in the store setters + on prefs load; the slider's min tracks the short-break value)
 - Eye tracking: away threshold, blink threshold
 - `baselineBpm` / `baselineBpmConfidence` — learned per-user engaged blink rate (drives personalized focus scoring)
 - Streak fields, daily goal (15 min–8h in 15-min steps), ritual/overlay/wallpaper/auto-start toggles
+- `tasks` — Focus-page to-do list (`{ id, title, due, done, createdAt }[]`); mutated only via the tasks slice, autosaved with prefs like everything else
 
 These are written to `atenttion-preferences.json` (merge-on-write) on every change and read on startup.

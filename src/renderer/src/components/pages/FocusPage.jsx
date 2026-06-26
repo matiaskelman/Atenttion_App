@@ -1,5 +1,6 @@
 import Pomodoro from '../Pomodoro'
 import EyeTracker from '../EyeTracker'
+import Tasks from '../Tasks'
 import { useStore } from '../../store'
 import { Clock, Flame, Zap } from 'lucide-react'
 import { formatDuration } from '../../utils/format'
@@ -31,14 +32,18 @@ export default function FocusPage({ pomodoroControls, eyeTrackerControls }) {
         </div>
       )}
 
-      {/* Main panels — the timer is the hero */}
+      {/* Main panels — the timer is the hero; the right column stacks Eye Tracking (natural
+          height) over the Tasks list (fills the rest, so the column bottom aligns with the timer) */}
       <div className="grid grid-cols-[1fr_280px] gap-4 items-stretch">
         <Pomodoro controls={pomodoroControls} />
-        <EyeTracker controls={eyeTrackerControls} />
+        <div className="flex flex-col gap-4 min-h-0">
+          <EyeTracker controls={eyeTrackerControls} />
+          <Tasks />
+        </div>
       </div>
 
       {/* Compact daily strip — goal progress + today's stats in one row */}
-      <div className="mt-5 card flex items-center gap-6">
+      <div data-tour="daily-strip" className="mt-5 card flex items-center gap-6">
         {/* Goal progress — goal only (capped at the goal) */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1.5">

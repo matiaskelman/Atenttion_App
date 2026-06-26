@@ -16,6 +16,7 @@ import SettingsPage from './components/pages/SettingsPage'
 import MilestonesPage from './components/pages/MilestonesPage'
 import RitualModal from './components/RitualModal'
 import GoalToast from './components/GoalToast'
+import OnboardingTour from './components/OnboardingTour'
 import { shallow } from 'zustand/shallow'
 import { buildPrefs } from './utils/prefs'
 
@@ -28,6 +29,7 @@ export default function App() {
   const ritualPhase = useStore((s) => s.ritualPhase)
   const ritualGoal = useStore((s) => s.ritualGoal)
   const overlayEnabled = useStore((s) => s.overlayEnabled)
+  const showTour = useStore((s) => s.showTour)
   const pomodoroControls = usePomodoro()
   const audioControls = useAudio()
   useAppTracker()
@@ -123,6 +125,12 @@ export default function App() {
   useEffect(() => {
     window.api?.data.loadPreferences().then((res) => {
       if (res?.success && res.prefs) applyPreferences(res.prefs)
+      // First launch (or a user who never finished it) → auto-show the spotlight tour
+      // once the Focus page has painted. Any falsy flag (incl. a missing prefs file)
+      // counts as "not completed".
+      if (!res?.prefs?.onboardingCompleted) {
+        setTimeout(() => useStore.getState().setShowTour(true), 800)
+      }
     })
     window.api?.data.loadSessions().then((res) => {
       if (res?.success && res.sessions?.length) {
@@ -296,6 +304,7 @@ export default function App() {
         />
       )}
       {showGoalToast && <GoalToast onClose={() => setShowGoalToast(false)} />}
+      {showTour && <OnboardingTour eyeTrackerControls={eyeTrackerControls} />}
     </div>
   )
 }

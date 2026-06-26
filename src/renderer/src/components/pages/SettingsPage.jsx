@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings2, FolderOpen, Check, CloudUpload } from 'lucide-react'
+import { Settings2, FolderOpen, Check, CloudUpload, Sparkles } from 'lucide-react'
 import { useStore } from '../../store'
 
 function Toggle({ checked, onChange }) {
@@ -86,7 +86,8 @@ export default function SettingsPage() {
     focusWallpaperEnabled, setFocusWallpaperEnabled,
     autoStartEyeTracking, setAutoStartEyeTracking,
     overlayEnabled, setOverlayEnabled,
-    pomodoroState, prefsSavedAt, markFeatureUsed
+    pomodoroState, prefsSavedAt, markFeatureUsed,
+    setShowTour, setPage
   } = useStore()
 
   const [paths, setPaths] = useState(null)
@@ -189,7 +190,7 @@ export default function SettingsPage() {
             label="Long break"
             value={longBreakDuration}
             onChange={(v) => { if (!isRunning) { setLongBreakDuration(v); markFeatureUsed('customTimer') } }}
-            min={5} max={60}
+            min={Math.max(1, Math.round(shortBreakDuration / 60))} max={60}
             disabled={isRunning}
           />
         </SettingGroup>
@@ -283,6 +284,21 @@ export default function SettingsPage() {
             checked={autoStartEyeTracking}
             onChange={() => setAutoStartEyeTracking(!autoStartEyeTracking)}
           />
+        </SettingGroup>
+
+        <SettingGroup title="Help">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs text-neutral-400">Welcome tour</span>
+              <span className="text-[10px] text-neutral-600">Replay the guided intro to the app</span>
+            </div>
+            <button
+              onClick={() => { setPage('focus'); setShowTour(true) }}
+              className="btn btn-secondary px-3 py-1.5 shrink-0"
+            >
+              <Sparkles size={13} /> Replay tour
+            </button>
+          </div>
         </SettingGroup>
 
         <SettingGroup title="Data Files">

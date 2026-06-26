@@ -122,14 +122,16 @@ export function AppAvatar({ name, size }) {
   )
 }
 
-export function AppUsageList({ usage, emptyText }) {
+export function AppUsageList({ usage, emptyText, cols = 1 }) {
   const sorted = Object.entries(usage).sort(([, a], [, b]) => b - a)
   if (sorted.length === 0) {
     return <p className="text-xs text-neutral-600 py-1">{emptyText}</p>
   }
   const maxTime = sorted[0][1]
+  // cols > 1 lays the rows out in a grid so a long list uses horizontal space instead of one tall column.
+  const containerCls = cols > 1 ? 'grid grid-cols-2 gap-x-5 gap-y-2' : 'flex flex-col gap-2'
   return (
-    <div className="flex flex-col gap-2">
+    <div className={containerCls}>
       {sorted.map(([name, seconds]) => (
         <div key={name} className="flex items-center gap-2.5">
           <AppAvatar name={name} />

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { useStore } from '../store'
+import { dueInfo } from './Tasks'
 
 const OUTCOME_STATES = [
   { value: 1, label: 'Scattered', dotClass: 'text-red-400',    activeClass: 'border-red-500 bg-red-500/10 text-red-300' },
@@ -64,11 +65,19 @@ const AUTO_START_SECONDS = 32
 
 export default function RitualModal({ onConfirmPre, onConfirmPost }) {
   const {
-    ritualPhase, ritualGoal, ritualMoodBefore, phoneUseExpected,
+    ritualPhase, ritualGoal, ritualMoodBefore, phoneUseExpected, pendingSessionScore, tasks,
     setRitualGoal, setRitualMoodBefore, setShowRitualModal, setPhoneUseExpected
   } = useStore()
 
+  const [goalFocused, setGoalFocused] = useState(false)
   const [outcomeRating, setOutcomeRating] = useState(0)
+
+  // Suggest the user's open tasks as the session goal — filtered by what's typed, soonest-due first.
+  const q = ritualGoal.trim().toLowerCase()
+  const goalSuggestions = tasks
+    .filter((t) => !t.done && t.title.toLowerCase() !== q && (!q || t.title.toLowerCase().includes(q)))
+    .sort((a, b) => (a.due ? Date.parse(a.due) : Infinity) - (b.due ? Date.parse(b.due) : Infinity))
+    .slice(0, 5)
   const [breathing, setBreathing] = useState(false)
   const [countdown, setCountdown] = useState(AUTO_START_SECONDS)
   const [postCountdown, setPostCountdown] = useState(60)
@@ -228,13 +237,38 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
 
           <div className="flex flex-col gap-2">
             <label className="text-xs text-neutral-400">What's the session goal? (optional)</label>
-            <input
-              type="text"
-              value={ritualGoal}
-              onChange={(e) => setRitualGoal(e.target.value)}
-              placeholder="My goal for this session…"
-              className="bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-violet-500 transition-colors"
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={ritualGoal}
+                onChange={(e) => setRitualGoal(e.target.value)}
+                onFocus={() => setGoalFocused(true)}
+                onBlur={() => setGoalFocused(false)}
+                placeholder="My goal for this session…"
+                className="w-full bg-surface-2 border border-surface-3 rounded-lg px-3 py-2 text-sm text-neutral-200 placeholder-neutral-600 outline-none focus:border-violet-500 transition-colors"
+              />
+              {/* Pick an existing task as the goal */}
+              {goalFocused && goalSuggestions.length > 0 && (
+                <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-surface-1 border border-surface-3 rounded-lg shadow-xl overflow-hidden max-h-44 overflow-y-auto">
+                  <p className="px-3 pt-2 pb-1 text-[10px] text-neutral-600 uppercase tracking-wider">From your tasks</p>
+                  {goalSuggestions.map((t) => {
+                    const due = dueInfo(t.due, false)
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        // onMouseDown (not onClick) fires before the input's blur, so the pick registers
+                        onMouseDown={(e) => { e.preventDefault(); setRitualGoal(t.title); setGoalFocused(false) }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-surface-2 transition-colors"
+                      >
+                        <span className="flex-1 min-w-0 truncate text-xs text-neutral-300">{t.title}</span>
+                        {due && <span className={`text-[10px] shrink-0 tabular-nums ${due.color}`}>{due.label}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -295,6 +329,22 @@ export default function RitualModal({ onConfirmPre, onConfirmPost }) {
       <div className="bg-surface-1 border border-surface-3 rounded-2xl p-6 w-full max-w-sm mx-4 flex flex-col gap-5 shadow-2xl">
 
         <h2 className="text-base font-semibold text-neutral-100">Session complete</h2>
+
+        {/* Frozen Focus Score earned this session — locked in before the survey, so it never
+            changes while you answer. null = not enough data to score it confidently. */}
+        <div className="flex items-center justify-between bg-surface-2 rounded-lg px-4 py-3">
+          <div className="flex flex-col">
+            <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Focus score</span>
+            <span className="text-[10px] text-neutral-600">Locked in for this session</span>
+          </div>
+          <span className={`text-2xl font-bold tabular-nums ${
+            pendingSessionScore == null ? 'text-neutral-600' :
+            pendingSessionScore >= 80  ? 'text-emerald-400' :
+            pendingSessionScore >= 50  ? 'text-amber-400'   : 'text-red-400'
+          }`}>
+            {pendingSessionScore ?? '—'}
+          </span>
+        </div>
 
         {ritualGoal && (
           <div className="bg-surface-2 rounded-lg px-4 py-3">

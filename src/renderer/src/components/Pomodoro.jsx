@@ -55,7 +55,7 @@ export default function Pomodoro({ controls }) {
   const offset = circumference * (1 - progress)
 
   return (
-    <div className="card flex flex-col items-center justify-center h-full gap-6 py-8">
+    <div data-tour="timer" className="card flex flex-col items-center justify-center h-full gap-6 py-8">
       {/* Mode badge */}
       <span className={`text-xs font-semibold px-3 py-1 rounded-full inline-flex items-center gap-1 ${colors.badge}`}>
         {isFreeRiderWork && <InfinityIcon size={12} />}

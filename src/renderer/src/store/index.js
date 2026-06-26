@@ -5,6 +5,8 @@ import { createEyeTrackerSlice } from './slices/eyeTrackerSlice'
 import { createSessionSlice } from './slices/sessionSlice'
 import { createSystemSlice } from './slices/systemSlice'
 import { createAudioSlice } from './slices/audioSlice'
+import { createTasksSlice } from './slices/tasksSlice'
+import { createOnboardingSlice } from './slices/onboardingSlice'
 
 export const useStore = create(subscribeWithSelector((set, get) => ({
   // Navigation
@@ -29,5 +31,7 @@ export const useStore = create(subscribeWithSelector((set, get) => ({
   ...createEyeTrackerSlice(set, get),
   ...createSessionSlice(set, get),
   ...createSystemSlice(set, get),
-  ...createAudioSlice(set, get)
+  ...createAudioSlice(set, get),
+  ...createTasksSlice(set, get),
+  ...createOnboardingSlice(set, get)
 })))

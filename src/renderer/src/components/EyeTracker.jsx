@@ -27,10 +27,16 @@ export default function EyeTracker({ controls }) {
   const {
     eyeTrackingActive, eyeStatus, blinkCount, blinkRate,
     blinkVariability, liveFocusScore, modelLoaded, modelLoading, lookingAwaySeconds, camError, modelError,
-    phoneDetected, baselineBpm, baselineBpmConfidence
+    phoneDetected, baselineBpm, baselineBpmConfidence,
+    showRitualModal, ritualPhase, pendingSessionScore
   } = useStore()
   const { startCam, stopCam } = controls
   const [showDetails, setShowDetails] = useState(false)
+
+  // While the post-session survey is open the tracker is frozen — show the saved session score the
+  // user just earned instead of the (now-stale) live score.
+  const surveyOpen = showRitualModal && ritualPhase === 'post'
+  const focusValue = surveyOpen && pendingSessionScore != null ? pendingSessionScore : liveFocusScore
 
   const rhythm  = blinkRhythm(blinkVariability)
   // Prefer the honest, baseline-RELATIVE state once a personal baseline is learned; otherwise fall
@@ -44,7 +50,7 @@ export default function EyeTracker({ controls }) {
   const focusTip = `Estimate from your blink patterns${relState ? ' vs your own baseline' : ''} — affected by dry eyes, lighting & screen distance.`
 
   return (
-    <div className="card flex flex-col gap-4 h-full">
+    <div data-tour="eyetracker" className="card flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-neutral-300">Eye Tracking</h3>
         {modelLoading && (
@@ -101,15 +107,15 @@ export default function EyeTracker({ controls }) {
           </div>
           <div className="stat-mini">
             <span className="stat-label flex items-center gap-1">
-              Focus
+              {surveyOpen ? 'Session' : 'Focus'}
               <HelpCircle size={10} className="text-neutral-600 cursor-help shrink-0" title={focusTip} aria-label={focusTip} />
             </span>
             <span className={`stat-value ${
-              liveFocusScore == null   ? 'text-neutral-600' :
-              liveFocusScore >= 80    ? 'text-emerald-400' :
-              liveFocusScore >= 50    ? 'text-amber-400'   : 'text-red-400'
+              focusValue == null   ? 'text-neutral-600' :
+              focusValue >= 80    ? 'text-emerald-400' :
+              focusValue >= 50    ? 'text-amber-400'   : 'text-red-400'
             }`}>
-              {liveFocusScore ?? '—'}
+              {focusValue ?? '—'}
             </span>
           </div>
         </div>
@@ -176,7 +182,7 @@ export default function EyeTracker({ controls }) {
       <button
         onClick={eyeTrackingActive ? stopCam : startCam}
         disabled={modelLoading || (!eyeTrackingActive && !modelLoaded)}
-        className={`btn w-full mt-auto ${
+        className={`btn w-full ${
           eyeTrackingActive ? 'btn-danger'
           : !modelLoaded ? 'btn-primary opacity-40 cursor-not-allowed'
           : 'btn-primary'
