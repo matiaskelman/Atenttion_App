@@ -31,7 +31,6 @@ const api = {
     exportCsv: (sessions) => ipcRenderer.invoke('data:exportCsv', sessions)
   },
   system: {
-    getInfo: () => ipcRenderer.invoke('system:getInfo'),
     getActiveApp: () => ipcRenderer.invoke('system:getActiveApp'),
     getIdleMs: () => ipcRenderer.invoke('system:getIdleMs'),
     getAppIcon: (name) => ipcRenderer.invoke('system:getAppIcon', name),

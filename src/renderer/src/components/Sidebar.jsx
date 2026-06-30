@@ -1,11 +1,10 @@
-import { Timer, BarChart2, Trophy, Monitor, Headphones, ScanEye, Settings2 } from 'lucide-react'
+import { Timer, BarChart2, Trophy, Headphones, ScanEye, Settings2 } from 'lucide-react'
 import { useStore } from '../store'
 
 const nav = [
   { id: 'focus',      icon: Timer,       label: 'Focus' },
   { id: 'stats',      icon: BarChart2,   label: 'Stats' },
   { id: 'milestones', icon: Trophy,      label: 'Goals' },
-  { id: 'system',     icon: Monitor,     label: 'System' },
   { id: 'audios',     icon: Headphones,  label: 'Audio' },
   { id: 'eyedebug',   icon: ScanEye,     label: 'Eye Debug' },
 ]

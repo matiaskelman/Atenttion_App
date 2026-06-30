@@ -1,11 +1,9 @@
 export const createSystemSlice = (set) => ({
   activeApp: null,
-  systemInfo: null,
   originalWallpaper: null,
   appUsageFocus: {},  // { processName: totalSeconds }
   appUsageBreak: {},  // { processName: totalSeconds }
   setActiveApp: (app) => set({ activeApp: app }),
-  setSystemInfo: (info) => set({ systemInfo: info }),
   setOriginalWallpaper: (p) => set({ originalWallpaper: p }),
   recordAppUsage: (app, bucket, seconds) =>
     set((s) =>

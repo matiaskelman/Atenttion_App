@@ -1,3 +1,12 @@
+// A streak is still alive only if the last active day was today or yesterday.
+// Anything older means at least one full day was skipped → streak broken.
+const isStreakAlive = (lastSessionDate) => {
+  if (!lastSessionDate) return false
+  const today = new Date().toLocaleDateString('en-CA')
+  const diffDays = Math.round((new Date(today) - new Date(lastSessionDate)) / 86400000)
+  return diffDays === 0 || diffDays === 1
+}
+
 export const createPomodoroSlice = (set) => ({
   // Preferences
   eyeAwayThresholdMs: 5000,
@@ -47,7 +56,11 @@ export const createPomodoroSlice = (set) => ({
     baselineBpm: prefs.baselineBpm ?? null,
     baselineBpmConfidence: prefs.baselineBpmConfidence ?? 0,
     freeRiderEnabled: prefs.freeRiderEnabled ?? false,
-    streak: prefs.streak ?? 0,
+    // Validate the stored streak against the last active day. The streak is only
+    // recomputed when a session completes (see updateStreak), so a stored value
+    // would otherwise stay frozen across skipped days. If the last session was
+    // neither today nor yesterday the streak is already broken — reset it to 0.
+    streak: isStreakAlive(prefs.lastSessionDate) ? (prefs.streak ?? 0) : 0,
     bestStreak: prefs.bestStreak ?? 0,
     lastSessionDate: prefs.lastSessionDate ?? null,
     featuresUsed: prefs.featuresUsed ?? {},

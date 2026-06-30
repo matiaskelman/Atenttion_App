@@ -14,7 +14,7 @@ Run `/devList` to see everything worth fixing or being aware of before making th
 
 ## What This Is
 
-A cross-platform (Windows/Mac) Electron desktop app for attention-aware focus tracking. It combines a Pomodoro timer with real-time eye tracking via webcam, system monitoring, and a document ingestion pipeline.
+A cross-platform (Windows/Mac) Electron desktop app for attention-aware focus tracking. It combines a Pomodoro timer with real-time eye tracking via webcam, active-app tracking, and ambient audio.
 
 **Stack:** Electron 33 · React 18 · Vite 5 · electron-vite 2 · Tailwind CSS 3 · Zustand 5
 
@@ -56,13 +56,13 @@ npm run dist:mac   # package as macOS DMG
 src/
 ├── main/
 │   ├── index.js          Main process entry — BrowserWindow, IPC wiring, custom protocol
-│   └── systemInfo.js     CPU/memory stats, active window (PowerShell/osascript), wallpaper API
+│   └── systemInfo.js     Active window (PowerShell/osascript), idle-time monitor, wallpaper API
 ├── preload/
 │   └── index.js          Context bridge — exposes api.window, api.system, api.data
 └── renderer/
     ├── index.html
     └── src/
-        ├── App.jsx                   Page shell (Focus/Stats/Milestones/System/Audio + Settings/EyeDebug) — hooks hoisted here; debounced prefs autosave; goal-reached toast; keyed page transitions
+        ├── App.jsx                   Page shell (Focus/Stats/Milestones/Audio + Settings/EyeDebug) — hooks hoisted here; debounced prefs autosave; goal-reached toast; keyed page transitions
         ├── store/index.js            Zustand store — all app state
         ├── hooks/
         │   ├── usePomodoro.js        Timer logic, session completion, notifications
@@ -81,7 +81,6 @@ src/
                 ├── StatsPage.jsx     recharts dashboard — Weekly Recap, Consistency heatmap, Optimal Duration, Focus Stamina, Deep Work, Focus Trend, Records, Apps-vs-Focus, Recurring Intentions, Distractions, Best Hours, app activity, XLSX export
                 ├── MilestonesPage.jsx  "Goals" — Getting Started discovery checklist + 12 milestone tracks (progress bars + badge chips) + 15 Achievement badges
                 ├── SettingsPage.jsx  Dedicated settings page (moved out of FocusPage); grouped cards; autosave indicator
-                ├── SystemPage.jsx    CPU/mem bars, active app, wallpaper changer
                 ├── AudiosPage.jsx    7 ambient sound cards + volume slider (receives audioControls prop)
                 └── EyeDebugPage.jsx  Live camera + tracker debug (dev surface — still in prod nav)
 
@@ -105,7 +104,6 @@ All communication goes through `contextBridge` → `window.api`:
 | Channel | Direction | Purpose |
 |---|---|---|
 | `window:minimize/maximize/close` | renderer→main | Frameless window controls |
-| `system:getInfo` | renderer→main | CPU%, memory%, platform |
 | `system:getActiveApp` | renderer→main | Foreground process name |
 | `system:getIdleMs` | renderer→main | ms since last system-wide keyboard/mouse input (phone typing-veto) |
 | `system:setWallpaper` | renderer→main | Set desktop wallpaper path |
@@ -116,7 +114,7 @@ All communication goes through `contextBridge` → `window.api`:
 
 ### State (Zustand store — `src/renderer/src/store/index.js`)
 Single flat store (uses `subscribeWithSelector` middleware). Key slices:
-- **Navigation:** `page` ('focus'|'stats'|'milestones'|'system'|'audios'|'settings'|'eyedebug'); `prefsSavedAt`/`markPrefsSaved` (autosave feedback); `featuresUsed`/`markFeatureUsed(name)` (persisted feature-discovery flags for the Getting Started checklist — e.g. 'audio', 'export')
+- **Navigation:** `page` ('focus'|'stats'|'milestones'|'audios'|'settings'|'eyedebug'); `prefsSavedAt`/`markPrefsSaved` (autosave feedback); `featuresUsed`/`markFeatureUsed(name)` (persisted feature-discovery flags for the Getting Started checklist — e.g. 'audio', 'export')
 - **Pomodoro:** `pomodoroState` ('idle'|'work'|'break'|'paused'), `timeLeft`, `sessionsCompleted`, `freeRiderEnabled`. **Free rider** = indefinite work: when enabled, the work session counts UP (`timeLeft` holds *elapsed* seconds, the tick adds instead of subtracts) and never auto-completes. Selected via the far-right notch of the work-session slider (steps 1–24 = 5–120 min, notch 25 = Free rider). It's saved only on Skip/Stop (→ idle, not a break) or on app close (`usePomodoro.js` `beforeunload` → `saveSessionSync`). **Ritual/survey:** `showRitualModal` + `ritualPhase` ('pre'|'post'); `pendingSessionScore` holds the frozen Focus Score of the just-completed session while the post-session survey is open (set in the ritual-completion branch of `usePomodoro.js`, cleared in `confirmPostRitual`/`reset`). While that survey is open the eye-tracker `runFrame` early-returns (freezes all live measurement) so the score the user earned stops moving AND the tracker can't flip `pomodoroState` back to `'work'` and re-complete the session; the EyeTracker card shows `pendingSessionScore` (label "Session") in place of the live score.
 - **Eye tracking:** `eyeStatus` ('looking'|'away'|'blinking'|'unknown'), `blinkCount`, `blinkRate`
 - **Sessions:** `sessions[]` (capped at last 1000, aligned with the on-disk cap), `todayFocusSeconds`, `streak`/`bestStreak`. Each session snapshots the `dailyGoalSeconds` in effect when it completed, so goal-based history (Consistency calendar, Goal-Hit Streak, Perfect Day, Goal Crusher) is measured against the goal active *that day*, not the current one. Per-day aggregation: `utils/sessionStats.js` `buildDailyMap(sessions, currentGoal)` (last goal-bearing session of a day wins; legacy sessions without the snapshot fall back to the current goal). Sessions completed after the Focus-Score-breakdown change also carry `scoreBreakdown` (`{ base, presence, phone, drift, fatigue }` — the blink-focus base + the four penalty factors that produced the score), surfaced as the per-session **"Why this score?"** +/− ledger in the expanded Sessions-table row (`utils/scoreBreakdown.js` `explainScore` → `SessionsTable.jsx`). Older sessions lack it and show a "breakdown not available" note.

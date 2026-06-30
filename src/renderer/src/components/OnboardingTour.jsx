@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import {
   Sparkles, Timer, ScanEye, Gauge, ListChecks, Target,
-  BarChart2, Trophy, Headphones, Monitor, Settings2,
+  BarChart2, Trophy, Headphones, Settings2,
   Camera, Check, ChevronLeft, ChevronRight, X
 } from 'lucide-react'
 import { useStore } from '../store'
@@ -55,11 +55,6 @@ const STEPS = [
     icon: Headphones, page: 'audios', target: '[data-page="audios"]', placement: 'right',
     title: 'Audio',
     body: 'On-device ambient soundscapes — white/pink/brown noise, lo-fi, rain, forest, café — to help you settle in.'
-  },
-  {
-    icon: Monitor, page: 'system', target: '[data-page="system"]', placement: 'right',
-    title: 'System',
-    body: 'A quick glance at CPU, memory, and your active app while you work.'
   },
   {
     icon: Settings2, page: 'settings', target: '[data-page="settings"]', placement: 'right',

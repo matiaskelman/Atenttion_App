@@ -1,11 +1,8 @@
 import { ipcMain, app } from 'electron'
 import { execSync, spawn } from 'child_process'
 import { deflateSync } from 'zlib'
-import os from 'os'
 import fs from 'fs'
 import path from 'path'
-
-let cpuLastMeasure = null
 
 // Windows: persistent PowerShell loop that reports the foreground app every 2s.
 // This compiles Add-Type once instead of recompiling on every poll.
@@ -126,23 +123,6 @@ function stopIdleMonitor() {
     idleProc.kill()
     idleProc = null
   }
-}
-
-function getCPUUsage() {
-  const cpus = os.cpus()
-  let idle = 0, total = 0
-  cpus.forEach((cpu) => {
-    for (const type in cpu.times) total += cpu.times[type]
-    idle += cpu.times.idle
-  })
-  if (!cpuLastMeasure) {
-    cpuLastMeasure = { idle, total }
-    return 0
-  }
-  const idleDiff = idle - cpuLastMeasure.idle
-  const totalDiff = total - cpuLastMeasure.total
-  cpuLastMeasure = { idle, total }
-  return Math.round((1 - idleDiff / totalDiff) * 100)
 }
 
 function getActiveWindowName() {
@@ -320,23 +300,6 @@ export function setupSystemIPC() {
   ipcMain.handle('system:getIdleMs', async () => {
     const v = lastIdleMs + (Date.now() - lastIdleAt)
     return Number.isFinite(v) ? v : 1e9
-  })
-
-  ipcMain.handle('system:getInfo', async () => {
-    const cpus = os.cpus()
-    const totalMem = os.totalmem()
-    const freeMem = os.freemem()
-    return {
-      platform: process.platform,
-      hostname: os.hostname(),
-      cpuModel: cpus[0]?.model?.split('@')[0]?.trim() || 'Unknown',
-      cpuCount: cpus.length,
-      totalMemGB: (totalMem / 1024 / 1024 / 1024).toFixed(1),
-      freeMemGB: (freeMem / 1024 / 1024 / 1024).toFixed(1),
-      usedMemPercent: Math.round((1 - freeMem / totalMem) * 100),
-      cpuPercent: getCPUUsage(),
-      uptime: Math.floor(os.uptime() / 3600)
-    }
   })
 
   ipcMain.handle('system:getActiveApp', async () => getActiveWindowName())

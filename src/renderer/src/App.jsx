@@ -9,7 +9,6 @@ import TitleBar from './components/TitleBar'
 import Sidebar from './components/Sidebar'
 import FocusPage from './components/pages/FocusPage'
 import StatsPage from './components/pages/StatsPage'
-import SystemPage from './components/pages/SystemPage'
 import AudiosPage from './components/pages/AudiosPage'
 import EyeDebugPage from './components/pages/EyeDebugPage'
 import SettingsPage from './components/pages/SettingsPage'
@@ -164,17 +163,6 @@ export default function App() {
     return () => clearInterval(id)
   }, [])
 
-  // Poll system info every 5s — lives here so it runs regardless of which page is active
-  useEffect(() => {
-    const poll = async () => {
-      const info = await window.api?.system.getInfo()
-      if (info) useStore.getState().setSystemInfo(info)
-    }
-    poll()
-    const id = setInterval(poll, 5000)
-    return () => clearInterval(id)
-  }, [])
-
   // Tell the main process whether the minimized overlay is allowed to appear
   useEffect(() => {
     window.api?.overlay?.setEnabled(overlayEnabled)
@@ -290,7 +278,6 @@ export default function App() {
             {page === 'focus'  && <FocusPage pomodoroControls={pomodoroControls} eyeTrackerControls={eyeTrackerControls} />}
             {page === 'stats'  && <StatsPage />}
             {page === 'milestones' && <MilestonesPage />}
-            {page === 'system' && <SystemPage />}
             {page === 'audios'    && <AudiosPage audioControls={audioControls} />}
             {page === 'eyedebug' && <EyeDebugPage videoRef={videoRef} recalibrate={recalibrate} />}
             {page === 'settings' && <SettingsPage />}
